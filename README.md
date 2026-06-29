@@ -141,6 +141,35 @@ sudo ./okboy -c config.yaml serve            # 启动（需 root 或 CAP_NET_ADM
 
 然后浏览器打开 `https://你的服务器/` → 输入用户名 + 密钥 → **Connect**。
 
+## 🌐 Fleet 模式：一个 hub 管多机
+
+机器多了，不想每台装一整套？同一个 okboy 二进制还能跑**中心化 fleet**：
+
+- 一个 **hub**（控制面，唯一公网入口）holds 全部用户 / 组 / 节点 / 期望状态；
+- 每台机器一个轻量 **agent**——**纯出站拉取、无数据库、不监听任何公网端口**；
+- 客户端**敲一次 hub**，授权的所有机器自动开口；
+- 一个 hub 可同时管 **nftables 与 ufw** 异构边缘。
+
+```bash
+# ① hub 上：注册节点 + 配置目标 + 授权用户
+okboy node-add edge-1                      # 打印一次性 token（配给该节点的 agent）
+okboy group-add web 8080
+okboy group-target add web edge-1 18080    # web 组在 edge-1 上映射到 18080
+okboy user-join alice web
+
+# ② 边缘节点上：填 /etc/okboy/agent.env(OKBOY_HUB/NODE/TOKEN) + agent.yaml，然后
+systemctl enable --now okboy-agent
+
+# ③ 客户端敲一次 hub —— 授权的所有节点自动放行（一次 knock 覆盖全队列）
+```
+
+- **🛡 安全护栏**：`agent_allowed_ports: [18080]` —— 节点只开白名单端口，**hub 被攻破也开不了 SSH**。
+- **📊 观测**：`okboy node-list` 看各节点 online / version / backend / 规则数。
+- **⬆ 自升级**：启用 `okboy-agent-upgrade.timer` 即可让 agent 每日自更新。
+
+> 📖 完整步骤（standalone / fleet / Kubernetes / 从 ufw-okboy 迁移 / 验证）见
+> **[部署指引 → docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**。
+
 ## HTTP API
 
 所有 `/api/*` 响应均为 `{"ok": ..., ...}`。认证用请求头
