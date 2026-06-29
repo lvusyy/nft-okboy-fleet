@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"nft-okboy-fleet/internal/db"
 	"nft-okboy-fleet/internal/firewall"
@@ -34,7 +35,6 @@ func (s *Server) authNode(w http.ResponseWriter, r *http.Request) *db.Node {
 		errJSON(w, http.StatusUnauthorized, "Invalid node token")
 		return nil
 	}
-	_ = s.db.TouchNode(node.ID)
 	return node
 }
 
@@ -48,6 +48,8 @@ func (s *Server) nodeDesiredState(w http.ResponseWriter, r *http.Request) {
 	if node == nil {
 		return
 	}
+	// Record liveness + the agent's self-reported version/backend (fleet view).
+	_ = s.db.UpdateNodeReport(node.ID, r.Header.Get("X-Okboy-Version"), r.Header.Get("X-Okboy-Backend"))
 	desired, err := s.db.DesiredStateForNode(node.ID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
@@ -70,4 +72,50 @@ func (s *Server) nodeDesiredState(w http.ResponseWriter, r *http.Request) {
 		"prefix": s.cfg.RulePrefix,
 		"rules":  rules,
 	})
+}
+
+// adminListNodes is the fleet view for the admin console: each registered node
+// with its liveness (online = contacted within 60s), self-reported version and
+// firewall backend, and the number of allow rules it currently enforces. Admin-authed.
+func (s *Server) adminListNodes(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAdmin(w, r); !ok {
+		return
+	}
+	nodes, err := s.db.ListNodes()
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
+	now := time.Now().Unix()
+	out := make([]map[string]any, 0, len(nodes))
+	for _, n := range nodes {
+		ruleCount := 0
+		if rules, e := s.db.DesiredStateForNode(n.ID); e == nil {
+			ruleCount = len(rules)
+		}
+		online := false
+		var lastSeen any = nil
+		if n.LastSeen != nil {
+			lastSeen = *n.LastSeen
+			online = now-*n.LastSeen < 60
+		}
+		out = append(out, map[string]any{
+			"id":         n.ID,
+			"name":       n.Name,
+			"last_seen":  lastSeen,
+			"online":     online,
+			"version":    ptrStr(n.AgentVersion),
+			"backend":    ptrStr(n.AgentBackend),
+			"rule_count": ruleCount,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "nodes": out})
+}
+
+// ptrStr maps a *string to its value or JSON null.
+func ptrStr(p *string) any {
+	if p == nil {
+		return nil
+	}
+	return *p
 }

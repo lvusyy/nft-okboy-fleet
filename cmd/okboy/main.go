@@ -69,7 +69,7 @@ func run(argv []string) error {
 	case "group-target":
 		return cli.CmdGroupTarget(cfgPath, rest)
 	case "agent":
-		return cli.CmdAgent(cfgPath, rest)
+		return cli.CmdAgent(cfgPath, version, rest)
 	case "user-join":
 		return cli.CmdUserJoin(cfgPath, rest)
 	case "user-leave":

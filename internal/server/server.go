@@ -80,6 +80,9 @@ func (s *Server) Routes() http.Handler {
 	// ---- Admin: audit ---- //
 	mux.HandleFunc("GET /api/admin/audit", s.adminListAudit)
 
+	// ---- Admin: fleet ---- //
+	mux.HandleFunc("GET /api/admin/nodes", s.adminListNodes)
+
 	// ---- Admin: TOTP ---- //
 	mux.HandleFunc("POST /api/admin/totp/enroll", s.totpEnroll)
 	mux.HandleFunc("POST /api/admin/totp/activate", s.totpActivate)

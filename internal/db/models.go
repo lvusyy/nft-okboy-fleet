@@ -64,11 +64,13 @@ type UserGroupState struct {
 // pulls its desired firewall state from the hub. TokenHash is sha256(token); the
 // raw token is shown once at creation and never stored.
 type Node struct {
-	ID        int64
-	Name      string
-	TokenHash string
-	LastSeen  *int64 // nullable unix seconds (agent last contact)
-	CreatedAt string
+	ID           int64
+	Name         string
+	TokenHash    string
+	LastSeen     *int64  // nullable unix seconds (agent last contact)
+	AgentVersion *string // self-reported by the agent on each pull (fleet view)
+	AgentBackend *string // self-reported firewall backend (nftables/ufw)
+	CreatedAt    string
 }
 
 // GroupTarget mirrors a row of group_targets: a group's (port, proto) on a

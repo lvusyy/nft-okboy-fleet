@@ -1,0 +1,13 @@
+[Unit]
+Description=okboy agent self-upgrade (one-shot: pull latest release, restart agent)
+Documentation=https://github.com/lvusyy/nft-okboy-fleet
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Upgrades only if a newer GitHub release exists. Agent nodes hold no database
+# (--no-backup) and run as the okboy-agent unit (--service okboy-agent). On
+# success the agent is restarted onto the new binary; a failed health check rolls
+# back to the previous binary. Enable the companion .timer to run this daily.
+ExecStart=/opt/okboy/okboy upgrade --no-backup --service okboy-agent

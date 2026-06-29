@@ -20,7 +20,7 @@ import (
 )
 
 // upgradeRepo is the GitHub repo whose Releases host the prebuilt binaries.
-const upgradeRepo = "lvusyy/nft-okboy"
+const upgradeRepo = "lvusyy/nft-okboy-fleet"
 
 // ghMirrors are tried in order for every GitHub download so the upgrade works
 // from networks where github.com is slow/blocked. "" is the direct path; the
@@ -43,7 +43,9 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
 	check := fs.Bool("check", false, "Only report whether a newer release exists; do not install")
 	target := fs.String("version", "", "Install this exact tag (e.g. v0.2.0) instead of the latest")
-	noRestart := fs.Bool("no-restart", false, "Do not restart the okboy service after upgrading")
+	noRestart := fs.Bool("no-restart", false, "Do not restart the service after upgrading")
+	noBackup := fs.Bool("no-backup", false, "Skip the DB backup (use on agent nodes, which hold no DB)")
+	service := fs.String("service", "okboy", "systemd unit to restart after upgrade (use okboy-agent on an agent node)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -91,10 +93,13 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 	}
 
 	// DB backup before any swap (rollback safety for forward migrations). Reuses
-	// CmdBackup so retention/checksum behave identically to a manual backup.
-	fmt.Println("Backing up database…")
-	if berr := CmdBackup(cfgPath, nil); berr != nil {
-		fmt.Fprintf(os.Stderr, "warning: db backup failed (continuing): %v\n", berr)
+	// CmdBackup so retention/checksum behave identically to a manual backup. Agent
+	// nodes hold no DB, so --no-backup skips this (and avoids creating an empty one).
+	if !*noBackup {
+		fmt.Println("Backing up database…")
+		if berr := CmdBackup(cfgPath, nil); berr != nil {
+			fmt.Fprintf(os.Stderr, "warning: db backup failed (continuing): %v\n", berr)
+		}
 	}
 
 	fmt.Printf("Downloading %s %s…\n", asset, want)
@@ -131,19 +136,19 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 	}
 
 	if !*noRestart {
-		if rerr := restartService("okboy"); rerr != nil {
+		if rerr := restartService(*service); rerr != nil {
 			// Not systemd-managed (dev / manual run): the new binary is staged, but
 			// starting it is the operator's job — nothing to verify or roll back.
 			fmt.Fprintf(os.Stderr, "warning: could not restart service (start it manually): %v\n", rerr)
-		} else if !serviceHealthy("okboy", 10*time.Second) {
+		} else if !serviceHealthy(*service, 10*time.Second) {
 			// The service restarted but never reached active — e.g. the new binary
-			// crashes on `serve`. A bare `--version` check (above) cannot catch that,
+			// crashes on start. A bare `--version` check (above) cannot catch that,
 			// so verify the live service and roll back to the previous binary.
 			_ = os.Rename(bak, exe)
-			_ = exec.Command("systemctl", "restart", "okboy").Run()
-			return fmt.Errorf("upgraded binary did not bring the service up; rolled back to the previous version")
+			_ = exec.Command("systemctl", "restart", *service).Run()
+			return fmt.Errorf("upgraded binary did not bring %q up; rolled back to the previous version", *service)
 		} else {
-			fmt.Println("Service restarted and healthy.")
+			fmt.Printf("Service %q restarted and healthy.\n", *service)
 		}
 	}
 
@@ -299,7 +304,7 @@ func assetForHost() string {
 	}
 	switch runtime.GOARCH {
 	case "amd64", "arm64", "386", "loong64", "ppc64le", "riscv64", "s390x":
-		return "nft-okboy-linux-" + runtime.GOARCH
+		return "okboy-linux-" + runtime.GOARCH
 	default:
 		// "arm" cannot be disambiguated into armv6/armv7 at runtime — deploy/
 		// install.sh resolves that from `uname -m`.

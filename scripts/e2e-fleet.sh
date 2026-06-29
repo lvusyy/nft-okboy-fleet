@@ -113,6 +113,8 @@ sleep 5
 echo "=== managed rules after agent apply ($AGENT_BACKEND) ==="; dump_rules | sed 's/^/    /'
 if has_ip 203.0.113.50; then ok "rule applied: 203.0.113.50 -> 18080"; else fail "rule not applied"; sed 's/^/    agent: /' "$WORK/agent.log"; fi
 if port_present 22; then fail "GUARD BYPASS: port 22 opened despite agent_allowed_ports=[18080]"; else ok "guard: hub's port-22 push REFUSED (agent_allowed_ports)"; fi
+echo "--- fleet dashboard (hub node-list) ---"; "$BIN" -c "$WORK/hub.yaml" node-list | sed 's/^/    /'
+if "$BIN" -c "$WORK/hub.yaml" node-list | grep -qE 'edge-1 +yes'; then ok "fleet: edge-1 online + self-reported (version/backend/rules)"; else fail "fleet: edge-1 not shown online in node-list"; fi
 
 knock 203.0.113.99; sleep 5
 if has_ip 203.0.113.99; then ok "rule moved to 203.0.113.99"; else fail "rule not updated"; fi

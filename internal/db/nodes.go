@@ -15,17 +15,24 @@ func HashToken(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-const nodeCols = `id, name, token_hash, last_seen, created_at`
+const nodeCols = `id, name, token_hash, last_seen, agent_version, agent_backend, created_at`
 
 func scanNode(s scanner) (*Node, error) {
 	var n Node
 	var lastSeen sql.NullInt64
-	if err := s.Scan(&n.ID, &n.Name, &n.TokenHash, &lastSeen, &n.CreatedAt); err != nil {
+	var ver, backend sql.NullString
+	if err := s.Scan(&n.ID, &n.Name, &n.TokenHash, &lastSeen, &ver, &backend, &n.CreatedAt); err != nil {
 		return nil, err
 	}
 	if lastSeen.Valid {
 		ls := lastSeen.Int64
 		n.LastSeen = &ls
+	}
+	if ver.Valid {
+		n.AgentVersion = &ver.String
+	}
+	if backend.Valid {
+		n.AgentBackend = &backend.String
 	}
 	return &n, nil
 }
@@ -89,6 +96,22 @@ func (d *DB) DeleteNode(id int64) error {
 func (d *DB) TouchNode(id int64) error {
 	_, err := d.sql.Exec(`UPDATE nodes SET last_seen=? WHERE id=?`, time.Now().Unix(), id)
 	return err
+}
+
+// UpdateNodeReport records the agent's contact: last_seen=now plus its reported
+// version and firewall backend (the fleet dashboard's liveness + upgrade view).
+// Empty values are stored as NULL so "never reported" stays distinguishable.
+func (d *DB) UpdateNodeReport(id int64, version, backend string) error {
+	_, err := d.sql.Exec(`UPDATE nodes SET last_seen=?, agent_version=?, agent_backend=? WHERE id=?`,
+		time.Now().Unix(), nullStr(version), nullStr(backend), id)
+	return err
+}
+
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 // AddGroupTarget upserts a (group, node) target's port/proto. A second call for

@@ -60,6 +60,8 @@ var schemaDDL = map[string]string{
 		name TEXT UNIQUE NOT NULL,
 		token_hash TEXT UNIQUE NOT NULL,
 		last_seen INTEGER,
+		agent_version TEXT,
+		agent_backend TEXT,
 		created_at TEXT NOT NULL DEFAULT (datetime('now')))`,
 	"group_targets": `CREATE TABLE group_targets (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,6 +104,7 @@ var migrations = []migration{
 	{3, "add totp_last_counter (TOTP replay protection)", migrate003TOTPCounter},
 	{4, "add UNIQUE(port, proto) index on groups when data permits", migrate004GroupsUnique},
 	{5, "add nodes + group_targets tables (C2 hub: per-node desired state)", nil},
+	{6, "add agent_version + agent_backend to nodes (fleet dashboard)", migrate006NodeReport},
 }
 
 // CurrentSchemaVersion is the highest migration version (mirrors db.py).
@@ -163,6 +166,23 @@ func migrate004GroupsUnique(tx *sql.Tx) error {
 	}
 	_, err = tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_groups_port_proto ON groups(port, proto)`)
 	return err
+}
+
+// migrate006NodeReport adds the agent self-report columns to an existing nodes
+// table (fresh installs get them from the baseline DDL). Idempotent via colExists.
+func migrate006NodeReport(tx *sql.Tx) error {
+	for _, col := range []string{"agent_version", "agent_backend"} {
+		ok, err := colExists(tx, "nodes", col)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if _, err := tx.Exec("ALTER TABLE nodes ADD COLUMN " + col + " TEXT"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // colExists reports whether table has a column named col. The table name is a

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"strconv"
+	"time"
 
 	"nft-okboy-fleet/internal/db"
 	"nft-okboy-fleet/internal/firewall"
@@ -62,9 +63,19 @@ func CmdNodeList(cfgPath string, args []string) error {
 		fmt.Println("No nodes registered.")
 		return nil
 	}
-	fmt.Printf("%4s  %-20s  %s\n", "ID", "Name", "Last Seen")
+	now := time.Now().Unix()
+	fmt.Printf("%4s  %-16s  %-6s  %-12s  %-8s  %5s  %s\n", "ID", "Name", "Online", "Version", "Backend", "Rules", "Last Seen")
 	for _, n := range nodes {
-		fmt.Printf("%4d  %-20s  %s\n", n.ID, n.Name, fmtKnock(n.LastSeen))
+		online := "no"
+		if n.LastSeen != nil && now-*n.LastSeen < 60 {
+			online = "yes"
+		}
+		rc := 0
+		if rules, e := d.DesiredStateForNode(n.ID); e == nil {
+			rc = len(rules)
+		}
+		fmt.Printf("%4d  %-16s  %-6s  %-12s  %-8s  %5d  %s\n",
+			n.ID, n.Name, online, strOr(n.AgentVersion, "-"), strOr(n.AgentBackend, "-"), rc, fmtKnock(n.LastSeen))
 	}
 	return nil
 }

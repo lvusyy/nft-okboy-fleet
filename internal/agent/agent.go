@@ -20,6 +20,8 @@ type Options struct {
 	NodeName string        // for logging only
 	Interval time.Duration // pull cadence
 	Insecure bool          // skip TLS verification (self-signed hub cert)
+	Version  string        // agent binary version, self-reported to the hub (fleet view)
+	Backend  string        // firewall backend name, self-reported to the hub
 	// AllowedPorts is the node's local guard: when non-empty, the agent opens
 	// ONLY these ports and refuses any hub-supplied rule on another port — so a
 	// compromised hub still cannot tell this node to open, say, SSH. Empty = all.
@@ -60,7 +62,7 @@ func Run(ctx context.Context, be firewall.FirewallBackend, opts Options) error {
 	log.Printf("agent: node=%q hub=%s interval=%s", opts.NodeName, url, opts.Interval)
 
 	for {
-		if desired, err := fetch(ctx, client, url, opts.Token); err != nil {
+		if desired, err := fetch(ctx, client, url, opts); err != nil {
 			log.Printf("agent: pull failed, keeping current rules: %v", err)
 		} else {
 			desired = filterAllowed(desired, opts.AllowedPorts)
@@ -82,12 +84,18 @@ func Run(ctx context.Context, be firewall.FirewallBackend, opts Options) error {
 }
 
 // fetch GETs the node desired-state with the bearer token and decodes the rules.
-func fetch(ctx context.Context, client *http.Client, url, token string) ([]rule, error) {
+func fetch(ctx context.Context, client *http.Client, url string, opts Options) ([]rule, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Authorization", "Bearer "+opts.Token)
+	if opts.Version != "" {
+		req.Header.Set("X-Okboy-Version", opts.Version)
+	}
+	if opts.Backend != "" {
+		req.Header.Set("X-Okboy-Backend", opts.Backend)
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

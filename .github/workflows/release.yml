@@ -1,6 +1,6 @@
 name: Release
 
-# Push a tag like v0.2.0 to build the static binary and publish a GitHub Release.
+# Push a tag like v0.2.0 to build the static binaries and publish a GitHub Release.
 on:
   push:
     tags: ['v*']
@@ -22,20 +22,16 @@ jobs:
         run: |
           mkdir -p dist
           V="${GITHUB_REF_NAME#v}"; LD="-s -w -X main.version=$V"
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64       go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-amd64 ./cmd/okboy
-          CGO_ENABLED=0 GOOS=linux GOARCH=386         go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-386 ./cmd/okboy
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64       go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-arm64 ./cmd/okboy
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-armv7 ./cmd/okboy
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-armv6 ./cmd/okboy
-          CGO_ENABLED=0 GOOS=linux GOARCH=riscv64     go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-riscv64 ./cmd/okboy
-          CGO_ENABLED=0 GOOS=linux GOARCH=ppc64le     go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-ppc64le ./cmd/okboy
-          CGO_ENABLED=0 GOOS=linux GOARCH=s390x       go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-s390x ./cmd/okboy
-          CGO_ENABLED=0 GOOS=linux GOARCH=loong64     go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-loong64 ./cmd/okboy
-          ( cd dist && sha256sum nft-okboy-linux-* > SHA256SUMS )
+          for arch in amd64 386 arm64 riscv64 ppc64le s390x loong64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "$LD" -o dist/okboy-linux-$arch ./cmd/okboy
+          done
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags "$LD" -o dist/okboy-linux-armv7 ./cmd/okboy
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -trimpath -ldflags "$LD" -o dist/okboy-linux-armv6 ./cmd/okboy
+          ( cd dist && sha256sum okboy-linux-* > SHA256SUMS )
       - name: publish release with binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/nft-okboy-linux-* dist/SHA256SUMS \
-            --title "nft-okboy ${GITHUB_REF_NAME}" \
+          gh release create "${GITHUB_REF_NAME}" dist/okboy-linux-* dist/SHA256SUMS \
+            --title "OkBoy Fleet ${GITHUB_REF_NAME}" \
             --notes-file .github/release-notes.md --generate-notes

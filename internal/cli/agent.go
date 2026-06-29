@@ -20,7 +20,7 @@ import (
 // until SIGINT/SIGTERM. It needs a config only for the firewall backend
 // (firewall_backend / rule_prefix / nft_* / agent_allowed_ports) — there is NO
 // local database.
-func CmdAgent(cfgPath string, args []string) error {
+func CmdAgent(cfgPath, version string, args []string) error {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	hub := fs.String("hub", "", "Hub base URL, e.g. https://hub.example/")
 	token := fs.String("token", "", "Node enrollment token (from `node-add`)")
@@ -70,5 +70,7 @@ func CmdAgent(cfgPath string, args []string) error {
 		Interval:     time.Duration(*interval) * time.Second,
 		Insecure:     *insecure,
 		AllowedPorts: allowed,
+		Version:      version,
+		Backend:      cfg.FirewallBackend,
 	})
 }

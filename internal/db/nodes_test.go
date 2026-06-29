@@ -34,6 +34,15 @@ func TestNodeCRUDAndTokenLookup(t *testing.T) {
 	if bad, _ := d.GetNodeByTokenHash(HashToken("nope")); bad != nil {
 		t.Fatalf("wrong token matched a node: %+v", bad)
 	}
+	// Agent self-report: last_seen + version + backend land on the node row.
+	if err := d.UpdateNodeReport(id, "v9.9.9", "ufw"); err != nil {
+		t.Fatalf("UpdateNodeReport: %v", err)
+	}
+	rn, _ := d.GetNodeByName("edge-1")
+	if rn.AgentVersion == nil || *rn.AgentVersion != "v9.9.9" || rn.AgentBackend == nil || *rn.AgentBackend != "ufw" || rn.LastSeen == nil {
+		t.Fatalf("node report not stored: %+v", rn)
+	}
+
 	// DeleteNode cascades to group_targets via the FK (no orphan targets).
 	if err := d.DeleteNode(id); err != nil {
 		t.Fatalf("DeleteNode: %v", err)
