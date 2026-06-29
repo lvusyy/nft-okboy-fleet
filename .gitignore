@@ -1,0 +1,12 @@
+/bin/
+/dist/
+*.db
+*.db-wal
+*.db-shm
+config.yaml
+
+# Tooling / workflow artifacts (not part of the project)
+.workflow/
+.spec-workflow/
+.maestro/
+.scratchpad/

@@ -1,0 +1,9 @@
+# Normalize all text to LF in the repo and on checkout, so shell scripts and CI
+# workflows work regardless of the contributor's OS.
+* text=auto eol=lf
+*.go      text eol=lf
+*.sh      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.md      text eol=lf
+Makefile  text eol=lf

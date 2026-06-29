@@ -1,0 +1,34 @@
+[Unit]
+Description=okboy fleet agent - pulls desired firewall state from the hub
+Documentation=https://github.com/lvusyy/nft-okboy
+After=network-online.target nftables.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Hub URL, node name and enrollment token live in a 0600 env file (NOT in this
+# unit, so the token never lands in the journal), e.g. /etc/okboy/agent.env:
+#   OKBOY_HUB=https://hub.example/
+#   OKBOY_NODE=edge-1
+#   OKBOY_TOKEN=<64-hex token from `okboy node-add`>
+EnvironmentFile=/etc/okboy/agent.env
+# The agent reads only the firewall backend + rule_prefix from agent.yaml; it
+# holds NO database and opens NO listening port — it dials OUT to the hub only.
+ExecStart=/opt/okboy/okboy -c /etc/okboy/agent.yaml agent \
+    --hub ${OKBOY_HUB} --node ${OKBOY_NODE} --token ${OKBOY_TOKEN} --interval 15
+Restart=on-failure
+RestartSec=5
+
+# The agent drives nftables/ufw (needs CAP_NET_ADMIN, which root has). The ufw
+# backend also rewrites /etc/ufw; the nft backend programs the kernel via netlink
+# and needs neither path (a nft-only node can drop the ReadWritePaths line).
+User=root
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+ProtectSystem=full
+ReadWritePaths=/etc/ufw /lib/ufw
+RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

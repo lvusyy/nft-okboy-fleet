@@ -1,0 +1,69 @@
+# okboy — nftables dynamic firewall allowlist manager (server config)
+# Copy to config.yaml and edit. The server reads -c/--config, else
+# /etc/okboy/config.yaml, else a config.yaml next to the binary.
+
+# The server listens here (behind nginx). Bind localhost only.
+listen_host: 127.0.0.1
+listen_port: 5000
+
+# Default L4 protocol for groups created without an explicit proto.
+proto: tcp
+
+# Optional opt-in whitelist: new groups may only bind these ports. Omit = no limit.
+# allowed_ports: [22, 80, 443, 8080]
+
+# ---- Security ----
+signature_ttl: 300            # HMAC timestamp window, seconds
+rule_prefix: okboy            # rule comment = <prefix>:<user>:<group> (nft & ufw)
+
+# X-Real-IP / X-Forwarded-For are trusted ONLY when the direct peer is in this
+# list (your reverse proxy). A direct client cannot then spoof its registered IP.
+trusted_proxies: ["127.0.0.1", "::1"]
+
+# Per-IP abuse throttle: after N failed auths from one IP within the window,
+# further /api/* requests from that IP get HTTP 429. Keyed on IP, not username
+# (so an attacker can't lock out a legitimate user). 0 disables.
+throttle_max_failures: 10
+throttle_window: 300
+
+# Require admin TOTP for sensitive admin actions once enrolled. true also blocks
+# un-enrolled admins from those actions (forces enrollment).
+require_admin_totp: false
+
+# Reject replay of an already-consumed TOTP step-up code (RFC 6238 §5.2).
+totp_replay_protection: true
+
+# ---- Anomaly detection (possible credential sharing) ----
+anomaly_window: 3600
+anomaly_max_changes: 5
+
+# ---- Firewall backend ----
+# Which firewall to drive: "nftables" (default), "ufw", or "none".
+#   nftables — a dedicated inet table (configured below). The default.
+#   ufw      — drive the host's ufw via the `ufw` CLI (Debian/Ubuntu, nf_tables).
+#              When migrating an existing ufw-okboy (Python) host, also set
+#              rule_prefix: ufw-okboy so its existing ufw rules are recognized.
+#   none     — control-plane-only hub: manage NO local firewall (edge agents
+#              enforce). Use on a dedicated hub that only serves desired state.
+firewall_backend: nftables
+
+# ---- nftables backend (used when firewall_backend: nftables) ----
+# A dedicated `inet <nft_table>` table with an accept-policy input chain at the
+# given hook priority. It only ever ADDS accept rules, so it coexists with the
+# host / k8s (Calico/Cilium/kube-proxy) firewall in their own tables and never
+# drops traffic of its own accord.
+nft_table: okboy
+nft_chain: input
+nft_priority: -150
+
+# ---- Storage ----
+db_path: /var/lib/okboy/okboy.db
+backup_dir: /var/lib/okboy/backups
+backup_keep: 7
+
+# ---- First-run user seed (optional) ----
+# On a FRESH db these users are created once. Generate a secret with:
+#   okboy gen-secret alice
+# users:
+#   admin:
+#     secret: "<64 hex chars>"

@@ -1,0 +1,2096 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>UFW OkBoy</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg: #f1f5f9;
+  --card: #ffffff;
+  --border: #e2e8f0;
+  --text: #0f172a;
+  --text2: #64748b;
+  --blue: #2563eb;
+  --blue-hover: #1d4ed8;
+  --green: #16a34a;
+  --green-bg: #f0fdf4;
+  --amber: #d97706;
+  --amber-bg: #fffbeb;
+  --red: #dc2626;
+  --red-bg: #fef2f2;
+  --gray: #94a3b8;
+  --radius: 12px;
+  --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.04);
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100dvh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 2rem 1rem;
+}
+
+.container {
+  width: 100%;
+  max-width: 420px;
+}
+
+header {
+  text-align: center;
+  margin-bottom: 1.5rem;
+  position: relative;
+}
+
+.lang-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: var(--card);
+  color: var(--text2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.lang-toggle:hover { background: var(--bg); color: var(--text); }
+
+header h1 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+header p {
+  color: var(--text2);
+  font-size: 0.875rem;
+  margin-top: 0.25rem;
+}
+
+.card {
+  background: var(--card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.5rem;
+  border: 1px solid var(--border);
+}
+
+/* ---- Login Form ---- */
+
+.field { margin-bottom: 1rem; }
+
+.field label {
+  display: block;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text2);
+  margin-bottom: 0.375rem;
+}
+
+.field input[type="text"],
+.field input[type="password"] {
+  width: 100%;
+  padding: 0.625rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.field input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.checkbox input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--blue);
+}
+
+.checkbox label {
+  margin-bottom: 0;
+  font-weight: 400;
+  cursor: pointer;
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.625rem 1.25rem;
+  border: none;
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+button:active { transform: scale(0.98); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn-primary {
+  width: 100%;
+  background: var(--blue);
+  color: #fff;
+}
+.btn-primary:hover:not(:disabled) { background: var(--blue-hover); }
+
+.btn-secondary {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-secondary:hover { background: #e2e8f0; }
+
+.btn-danger {
+  background: var(--red-bg);
+  color: var(--red);
+  border: 1px solid #fecaca;
+}
+.btn-danger:hover { background: #fee2e2; }
+
+.btn-small {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+}
+
+.login-error {
+  background: var(--red-bg);
+  color: var(--red);
+  font-size: 0.8125rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  display: none;
+}
+
+/* ---- Dashboard ---- */
+
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-weight: 600;
+  font-size: 0.875rem;
+}
+
+.status-bar .dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.status-bar.ok     { background: var(--green-bg); color: var(--green); }
+.status-bar.ok .dot { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+.status-bar.warn     { background: var(--amber-bg); color: var(--amber); }
+.status-bar.warn .dot { background: var(--amber); }
+
+.status-bar.err     { background: var(--red-bg); color: var(--red); }
+.status-bar.err .dot { background: var(--red); }
+
+.status-bar.off     { background: var(--bg); color: var(--gray); }
+.status-bar.off .dot { background: var(--gray); }
+
+.info-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.info-item .label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.info-item .value {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.info-item.span2 { grid-column: span 2; }
+
+/* Progress bar */
+.progress-wrap {
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 1rem;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--blue);
+  border-radius: 2px;
+  transition: width 1s linear;
+  width: 100%;
+}
+
+/* Activity log */
+.log-section { margin-bottom: 1rem; }
+
+.log-section h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.5rem;
+}
+
+.log {
+  max-height: 180px;
+  overflow-y: auto;
+  font-size: 0.8125rem;
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+  line-height: 1.7;
+  color: var(--text2);
+  scrollbar-width: thin;
+}
+
+.log-entry { padding: 0.125rem 0; }
+.log-entry.ok   { color: var(--green); }
+.log-entry.warn { color: var(--amber); }
+.log-entry.err  { color: var(--red); }
+
+/* Action buttons */
+.actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.actions button { flex: 1; }
+
+/* Admin list search inputs */
+.list-search {
+  width: 100%;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.list-search:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Secret reveal box (after create-user / revoke rotation) */
+.secret-box {
+  background: var(--amber-bg);
+  border: 1px solid var(--amber);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+}
+.secret-box-msg {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--amber);
+  margin-bottom: 0.5rem;
+}
+.secret-box-value {
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", monospace;
+  font-size: 0.8125rem;
+  word-break: break-all;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+/* ---- Admin console: section panels ---- */
+/* Each admin section (Users / Groups / Audit / My auth / TOTP) is a clearly
+   delineated card-within-the-card: a tinted header bar, inner padding, its own
+   border + shadow, and a clear gap between panels so sections never blur. */
+.panel {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  margin-bottom: 1.25rem;
+  overflow: hidden;
+}
+.panel:last-child { margin-bottom: 0; }
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg);
+  border-bottom: 2px solid var(--border);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.panel-body { padding: 0.75rem; }
+
+/* Small caption above a group of related panels (Management / Monitoring / etc.) */
+.panel-caption {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  color: var(--text2);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin: 0 0 0.4rem 0.15rem;
+}
+.panel-caption:not(:first-child) { margin-top: 1.5rem; }
+
+/* ---- Compact pager under paginated lists ---- */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+  font-size: 0.8125rem;
+}
+.pager .pager-info {
+  color: var(--text2);
+  font-variant-numeric: tabular-nums;
+  min-width: 4.5rem;
+  text-align: center;
+}
+.pager button { padding: 0.25rem 0.6rem; font-size: 0.8125rem; }
+
+/* ---- Compact per-user action row ---- */
+/* One gracefully-wrapping row; destructive actions de-emphasized as red
+   text-buttons so the row reads lighter while keeping every action visible. */
+.user-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
+  margin-top: 0.3rem;
+}
+.btn-link-danger {
+  background: none;
+  border: none;
+  color: var(--red);
+  padding: 0.25rem 0.4rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.btn-link-danger:hover { background: var(--red-bg); }
+
+[hidden] { display: none !important; }
+
+/* Mobile refinements */
+@media (max-width: 480px) {
+  body { padding: 1rem 0.75rem; }
+  .card { padding: 1.25rem; }
+  header h1 { font-size: 1.25rem; }
+
+  /* Header + language toggle: keep the toggle from colliding with the title.
+     Make it static and right-aligned so a long title never overlaps it. */
+  .lang-toggle { position: static; display: inline-block; margin-bottom: 0.5rem; }
+
+  /* Admin per-row action bars: let buttons wrap onto new lines instead of
+     overflowing. Buttons size to content rather than stretching full-width. */
+  #admin-users .actions,
+  #admin-users .user-actions,
+  #admin-groups .actions {
+    flex-wrap: wrap;
+  }
+  #admin-users .actions button,
+  #admin-users .user-actions button,
+  #admin-groups .actions button {
+    flex: 0 1 auto;
+  }
+  /* Floated group Delete button: drop the float so it wraps cleanly. */
+  #admin-groups [data-delgroup] { float: none; margin-top: 0.25rem; }
+  /* Keep long usernames / IPs from forcing horizontal scroll. */
+  #admin-users, #admin-groups { word-break: break-word; }
+}
+
+/* Dark mode */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --border: #334155;
+    --text: #f1f5f9;
+    --text2: #94a3b8;
+    --green-bg: #052e16;
+    --amber-bg: #451a03;
+    --red-bg: #450a0a;
+    --shadow: 0 1px 3px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.2);
+  }
+  .field input[type="text"],
+  .field input[type="password"] {
+    background: #0f172a;
+    color: var(--text);
+  }
+  .btn-secondary { background: #0f172a; }
+  .btn-secondary:hover { background: #334155; }
+  .btn-danger { border-color: #7f1d1d; }
+}
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <button type="button" id="btn-lang" class="lang-toggle">中文 / EN</button>
+    <h1>UFW OkBoy</h1>
+    <p data-i18n="app_subtitle">Dynamic Firewall Allowlist</p>
+  </header>
+
+  <!-- Login View -->
+  <div id="login-view" class="card">
+    <div id="login-error" class="login-error"></div>
+    <form id="login-form">
+      <div class="field">
+        <label for="f-user" data-i18n="login_username">Username</label>
+        <input type="text" id="f-user" autocomplete="username" required>
+      </div>
+      <div class="field">
+        <label for="f-secret" data-i18n="login_secret">Secret</label>
+        <input type="password" id="f-secret" autocomplete="current-password" required>
+      </div>
+      <div class="field checkbox">
+        <input type="checkbox" id="f-remember" checked>
+        <label for="f-remember" data-i18n="login_remember">Remember credentials</label>
+      </div>
+      <div class="field">
+        <label for="f-login-pin" data-i18n="login_pin_label">PIN (optional — encrypts saved credentials & locks admin)</label>
+        <input type="password" id="f-login-pin" autocomplete="off" data-i18n-ph="login_pin_ph" placeholder="leave blank for plaintext fallback">
+      </div>
+      <button type="submit" class="btn-primary" id="btn-connect" data-i18n="login_connect">Connect</button>
+    </form>
+  </div>
+
+  <!-- Dashboard View -->
+  <div id="dash-view" class="card" hidden>
+    <div id="status-bar" class="status-bar off">
+      <span class="dot"></span>
+      <span id="status-text" data-i18n="status_connecting">Connecting...</span>
+    </div>
+
+    <div class="info-grid">
+      <div class="info-item">
+        <div class="label" data-i18n="dash_user">User</div>
+        <div class="value" id="info-user">-</div>
+      </div>
+      <div class="info-item">
+        <div class="label" data-i18n="dash_next_knock">Next Knock</div>
+        <div class="value" id="info-countdown">-</div>
+      </div>
+      <div class="info-item span2">
+        <div class="label" data-i18n="dash_registered_ip">Registered IP</div>
+        <div class="value" id="info-ip">-</div>
+      </div>
+    </div>
+
+    <div class="progress-wrap">
+      <div class="progress-fill" id="progress"></div>
+    </div>
+
+    <div class="log-section">
+      <h3 data-i18n="dash_activity">Activity</h3>
+      <div id="log" class="log"></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn-secondary btn-small" id="btn-knock" data-i18n="dash_knock_now">Knock Now</button>
+      <button class="btn-secondary btn-small" id="btn-admin" data-i18n="dash_admin" hidden>Admin</button>
+      <button class="btn-danger btn-small" id="btn-disconnect" data-i18n="dash_disconnect">Disconnect</button>
+    </div>
+  </div>
+
+  <!-- PIN Lock View (admin page entry) -->
+  <div id="pin-view" class="card" hidden>
+    <div id="pin-error" class="login-error"></div>
+    <form id="pin-form">
+      <div class="field">
+        <label for="f-pin" data-i18n="pin_label">Admin PIN (unlock encrypted vault)</label>
+        <input type="password" id="f-pin" autocomplete="off" required>
+      </div>
+      <button type="submit" class="btn-primary" id="btn-unlock" data-i18n="pin_unlock">Unlock</button>
+      <button type="button" class="btn-secondary btn-small" id="btn-pin-cancel" style="margin-top:.5rem" data-i18n="pin_cancel">Cancel</button>
+    </form>
+  </div>
+
+  <!-- Admin View -->
+  <div id="admin-view" class="card" hidden>
+    <h2 style="font-size:1.1rem;margin-bottom:.75rem" data-i18n="admin_title">Admin Console</h2>
+    <div id="admin-error" class="login-error"></div>
+
+    <!-- Secret reveal box: shown after a user is created or a secret rotated.
+         Stays visible (with Copy + Dismiss) until the admin dismisses it. -->
+    <div id="secret-box" class="secret-box" hidden>
+      <div class="secret-box-msg" id="secret-box-msg"></div>
+      <div class="secret-box-value" id="secret-box-value"></div>
+      <div class="actions" style="margin-top:.5rem">
+        <button class="btn-primary btn-small" id="btn-copy-secret" data-i18n="copy">Copy</button>
+        <button class="btn-secondary btn-small" id="btn-dismiss-secret" data-i18n="pin_cancel">Cancel</button>
+      </div>
+    </div>
+
+    <div class="panel-caption" data-i18n="admin_cap_management">Management</div>
+
+    <div class="panel">
+      <div class="panel-head"><span data-i18n="admin_users">Users</span></div>
+      <div class="panel-body">
+        <input type="text" id="search-users" class="list-search" data-i18n-ph="searchUsers" placeholder="Search users…">
+        <div id="admin-users" class="log" style="max-height:none"></div>
+        <div id="users-pager" class="pager" hidden></div>
+        <div class="actions" style="margin-top:.5rem">
+          <input type="text" id="new-user" data-i18n-ph="admin_username_ph" placeholder="username" style="flex:1">
+          <input type="checkbox" id="new-user-admin"><label for="new-user-admin" style="font-size:.8rem" data-i18n="admin_admin">admin</label>
+          <button class="btn-secondary btn-small" id="btn-add-user" data-i18n="admin_add">Add</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span data-i18n="admin_groups">Groups</span></div>
+      <div class="panel-body">
+        <input type="text" id="search-groups" class="list-search" data-i18n-ph="searchGroups" placeholder="Search groups…">
+        <div id="admin-groups" class="log" style="max-height:none"></div>
+        <div id="groups-pager" class="pager" hidden></div>
+        <div class="actions" style="margin-top:.5rem">
+          <input type="text" id="new-group-name" data-i18n-ph="admin_name_ph" placeholder="name" style="flex:1">
+          <input type="number" id="new-group-port" data-i18n-ph="admin_port_ph" placeholder="port" style="width:5rem">
+          <button class="btn-secondary btn-small" id="btn-add-group" data-i18n="admin_add">Add</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel-caption" data-i18n="admin_cap_monitoring">Monitoring</div>
+
+    <div class="panel">
+      <div class="panel-head"><span data-i18n="admin_audit">Audit Log</span></div>
+      <div class="panel-body">
+        <div id="admin-audit" class="log" style="max-height:14rem"></div>
+        <button class="btn-secondary btn-small" id="btn-refresh-audit" style="margin-top:.5rem" data-i18n="admin_refresh">Refresh</button>
+      </div>
+    </div>
+
+    <div class="panel-caption" data-i18n="admin_cap_account">My account</div>
+
+    <div class="panel">
+      <div class="panel-head"><span data-i18n="admin_my_auth">My Group Authorization</span></div>
+      <div class="panel-body">
+        <p style="font-size:.75rem;color:var(--text2);margin-bottom:.5rem" data-i18n="admin_my_auth_hint">
+          Select which groups to authorize your IP for. First group is checked by default.
+          Save to apply. Selection is not replayed across sessions.
+        </p>
+        <div id="my-groups"></div>
+        <button class="btn-primary btn-small" id="btn-save-auth" style="margin-top:.5rem" data-i18n="admin_save_auth">Save Authorization</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head"><span data-i18n="admin_totp">Two-Factor (TOTP)</span></div>
+      <div class="panel-body">
+        <p style="font-size:.75rem;color:var(--text2);margin-bottom:.5rem" data-i18n="admin_totp_hint">
+          Protects sensitive actions (revoke, delete). Add the secret to an
+          authenticator app, then confirm a code to activate.
+        </p>
+        <div id="totp-status" style="font-size:.8rem;margin-bottom:.5rem"></div>
+        <div id="totp-enroll" hidden>
+          <div id="totp-secret" class="log" style="max-height:none;word-break:break-all;font-size:.7rem"></div>
+          <div class="actions" style="margin-top:.5rem">
+            <input type="text" id="totp-code" data-i18n-ph="admin_totp_code_ph" placeholder="6-digit code" inputmode="numeric" style="flex:1">
+            <button class="btn-primary btn-small" id="btn-totp-activate" data-i18n="admin_totp_activate">Activate</button>
+          </div>
+        </div>
+        <div class="actions" style="margin-top:.5rem">
+          <button class="btn-secondary btn-small" id="btn-totp-enroll" data-i18n="admin_totp_enroll">Enroll / Re-enroll</button>
+          <button class="btn-danger btn-small" id="btn-totp-disable" data-i18n="admin_totp_disable">Disable</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="actions" style="margin-top:1rem">
+      <button class="btn-secondary btn-small" id="btn-admin-back" data-i18n="admin_back">Back to Dashboard</button>
+      <button class="btn-danger btn-small" id="btn-lock" data-i18n="admin_lock">Lock</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+
+// ================================================================ //
+//  Constants
+// ================================================================ //
+
+const KNOCK_INTERVAL = 30;          // seconds
+const STORAGE_KEY    = "ufw-okboy"; // localStorage key
+const MAX_LOG        = 50;          // max log entries kept
+const API_BASE       = "";          // same origin (empty = relative)
+const LANG_KEY       = "ufw_lang";  // localStorage key for chosen language
+const PAGE_SIZE      = 8;            // admin list rows per page (Users / Groups)
+
+// ================================================================ //
+//  i18n — bilingual string dictionary (en / zh). Every user-facing
+//  string across all four views and all JS messages lives here. Static
+//  HTML uses data-i18n / data-i18n-ph attributes resolved by applyI18n();
+//  dynamic JS strings call t(key, ...args) so they switch on toggle too.
+//  t() supports simple {0}, {1}... positional placeholder substitution.
+// ================================================================ //
+
+const I18N = {
+  en: {
+    app_subtitle: "Dynamic Firewall Allowlist",
+    // ---- Login view ----
+    login_username: "Username",
+    login_secret: "Secret",
+    login_remember: "Remember credentials",
+    login_pin_label: "PIN (optional — encrypts saved credentials & locks admin)",
+    login_pin_ph: "leave blank for plaintext fallback",
+    login_connect: "Connect",
+    login_connecting: "Connecting...",
+    // ---- Dashboard view ----
+    status_connecting: "Connecting...",
+    status_connected: "Connected",
+    status_warning: "Warning",
+    status_anomaly: "Warning: Anomaly Detected",
+    status_network_error: "Network Error",
+    dash_user: "User",
+    dash_next_knock: "Next Knock",
+    dash_registered_ip: "Registered IP",
+    dash_activity: "Activity",
+    dash_knock_now: "Knock Now",
+    dash_admin: "Admin",
+    dash_disconnect: "Disconnect",
+    dash_detecting: "detecting...",
+    // ---- PIN view ----
+    pin_label: "Admin PIN (unlock encrypted vault)",
+    pin_unlock: "Unlock",
+    pin_cancel: "Cancel",
+    pin_locked: "Locked. Wait {0}s.",
+    pin_too_many: "Too many wrong PINs. Locked 30s.",
+    pin_wrong: "Wrong PIN ({0}/5)",
+    // ---- Admin view (static) ----
+    admin_title: "Admin Console",
+    admin_users: "Users",
+    admin_groups: "Groups",
+    admin_audit: "Audit Log",
+    admin_my_auth: "My Group Authorization",
+    admin_my_auth_hint: "Select which groups to authorize your IP for. First group is checked by default. Save to apply. Selection is not replayed across sessions.",
+    admin_save_auth: "Save Authorization",
+    admin_totp: "Two-Factor (TOTP)",
+    admin_totp_hint: "Protects sensitive actions (revoke, delete). Add the secret to an authenticator app, then confirm a code to activate.",
+    admin_back: "Back to Dashboard",
+    admin_lock: "Lock",
+    admin_add: "Add",
+    admin_admin: "admin",
+    admin_refresh: "Refresh",
+    admin_username_ph: "username",
+    admin_name_ph: "name",
+    admin_port_ph: "port",
+    admin_totp_code_ph: "6-digit code",
+    admin_totp_activate: "Activate",
+    admin_totp_enroll: "Enroll / Re-enroll",
+    admin_totp_disable: "Disable",
+    // ---- Admin view (dynamic JS-built) ----
+    admin_tag_admin: "[admin]",
+    admin_revoke: "Revoke",
+    admin_delete: "Delete",
+    admin_make_admin: "Make admin",
+    admin_remove_admin: "Remove admin",
+    admin_manage_groups: "Manage groups",
+    admin_groups_loading: "Loading groups...",
+    admin_no_groups: "(no groups)",
+    admin_audit_none: "(no entries)",
+    admin_port_label: "port {0}",
+    // ---- section captions ----
+    admin_cap_management: "Management",
+    admin_cap_monitoring: "Monitoring",
+    admin_cap_account: "My account",
+    // ---- pagination ----
+    prev: "‹ Prev",
+    next: "Next ›",
+    pageOf: "{0} / {1}",
+    // ---- search / copy ----
+    searchUsers: "Search users…",
+    searchGroups: "Search groups…",
+    copy: "Copy",
+    copied: "Copied",
+    newSecretDeliver: "New secret — copy and deliver it securely (shown once)",
+    // ---- confirm() / prompt() texts ----
+    confirm_revoke: "Revoke {0}?\n\nCloses their open ports, clears their session, and rotates their secret. They must re-authenticate with a NEW secret you deliver to them.",
+    confirm_delete_user: "Delete user {0}?\n\nThis removes the user, closes their open ports, and cannot be undone.",
+    confirm_delete_group: "Delete group {0}?\n\nThis removes the group and closes its members' ports. This cannot be undone.",
+    prompt_totp_revoke: "Enter your 6-digit TOTP code to confirm revoking {0}:",
+    prompt_totp_delete_user: "Enter your 6-digit TOTP code to confirm deleting {0}:",
+    prompt_totp_delete_group: "Enter your 6-digit TOTP code to confirm deleting group {0}:",
+    prompt_totp_set_admin: "Enter your 6-digit TOTP code to confirm changing admin rights for {0}:",
+    prompt_set_admin_pin: "Set an admin PIN to lock the admin console (encrypts your saved credentials):",
+    prompt_new_secret: "New secret for {0} (copy & deliver securely — shown once):",
+    prompt_totp_disable: "Enter your current TOTP code to disable 2FA:",
+    // ---- addLog / status messages ----
+    log_connecting: "Connecting...",
+    log_ip_updated: "IP updated: {0}{1}",
+    log_was_ip: " (was {0})",
+    log_heartbeat: "Heartbeat OK - {0}",
+    log_auth_failed: "Auth failed: {0}",
+    log_server: "Server: {0}",
+    log_error: "Error: {0}",
+    log_unknown_error: "unknown error",
+    log_tab_resumed: "Tab resumed, knocking now",
+    log_manual_knock: "Manual knock",
+    log_admin_locked: "Admin locked",
+    log_created_user: "Created {0} (full secret returned in response — copy it now)",
+    log_created_group: "Created group {0}",
+    log_revoked_new_secret: "Revoked {0} — new secret issued (shown once)",
+    log_revoked: "Revoked {0}",
+    log_deleted_user: "Deleted user {0}",
+    log_deleted_group: "Deleted group {0}",
+    log_admin_granted: "{0} is now an admin",
+    log_admin_revoked: "{0} is no longer an admin",
+    log_group_added: "Added {0} to {1}",
+    log_group_removed: "Removed {0} from {1}",
+    log_auth_partial: "Authorization partial: {0} denied",
+    log_auth_saved: "Authorization saved",
+    log_totp_started: "TOTP enrollment started — add the secret to your authenticator, then activate",
+    log_totp_activated: "TOTP activated",
+    log_totp_disabled: "TOTP disabled",
+    // ---- error texts ----
+    err_load_failed: "Load failed: {0}",
+    err_some_denied: "Some denied: {0}",
+    err_failed: "failed",
+    err_revoke_failed: "revoke failed",
+    err_delete_failed: "delete failed",
+    err_set_admin_failed: "failed to change admin rights",
+    err_group_change_failed: "failed to change group",
+    err_rate_limited: "Too many requests — please wait a moment and retry.",
+    err_http: "Server returned an unexpected response (HTTP {0}).",
+    err_enroll_failed: "enroll failed",
+    err_activate_failed: "activate failed",
+    err_disable_failed: "disable failed",
+    // ---- TOTP status ----
+    totp_on: "● Enabled — sensitive actions require a 6-digit code",
+    totp_off: "○ Disabled — sensitive actions are not 2FA-protected",
+    totp_secret_html: "Secret (manual entry): <b>{0}</b><br><br>otpauth URI (for QR import):<br>{1}",
+  },
+  zh: {
+    app_subtitle: "动态防火墙白名单",
+    // ---- Login view ----
+    login_username: "用户名",
+    login_secret: "密钥",
+    login_remember: "记住凭据",
+    login_pin_label: "PIN 码（可选 — 加密保存的凭据并锁定管理后台）",
+    login_pin_ph: "留空则使用明文回退",
+    login_connect: "连接",
+    login_connecting: "连接中…",
+    // ---- Dashboard view ----
+    status_connecting: "连接中…",
+    status_connected: "已连接",
+    status_warning: "警告",
+    status_anomaly: "警告：检测到异常",
+    status_network_error: "网络错误",
+    dash_user: "用户",
+    dash_next_knock: "下次心跳",
+    dash_registered_ip: "已注册 IP",
+    dash_activity: "活动日志",
+    dash_knock_now: "立即心跳",
+    dash_admin: "管理后台",
+    dash_disconnect: "断开连接",
+    dash_detecting: "检测中…",
+    // ---- PIN view ----
+    pin_label: "管理 PIN 码（解锁加密保险库）",
+    pin_unlock: "解锁",
+    pin_cancel: "取消",
+    pin_locked: "已锁定，请等待 {0} 秒。",
+    pin_too_many: "PIN 码错误次数过多，已锁定 30 秒。",
+    pin_wrong: "PIN 码错误（{0}/5）",
+    // ---- Admin view (static) ----
+    admin_title: "管理控制台",
+    admin_users: "用户",
+    admin_groups: "分组",
+    admin_audit: "审计日志",
+    admin_my_auth: "我的分组授权",
+    admin_my_auth_hint: "选择要为你的 IP 授权的分组。默认勾选第一个分组。保存以生效。选择不会跨会话保留。",
+    admin_save_auth: "保存授权",
+    admin_totp: "双因素认证（TOTP）",
+    admin_totp_hint: "保护敏感操作（吊销、删除）。将密钥添加到验证器应用，然后输入验证码以激活。",
+    admin_back: "返回仪表盘",
+    admin_lock: "锁定",
+    admin_add: "添加",
+    admin_admin: "管理员",
+    admin_refresh: "刷新",
+    admin_username_ph: "用户名",
+    admin_name_ph: "名称",
+    admin_port_ph: "端口",
+    admin_totp_code_ph: "6 位验证码",
+    admin_totp_activate: "激活",
+    admin_totp_enroll: "注册 / 重新注册",
+    admin_totp_disable: "禁用",
+    // ---- Admin view (dynamic JS-built) ----
+    admin_tag_admin: "[管理员]",
+    admin_revoke: "吊销",
+    admin_delete: "删除",
+    admin_make_admin: "设为管理员",
+    admin_remove_admin: "取消管理员",
+    admin_manage_groups: "管理分组",
+    admin_groups_loading: "加载分组中…",
+    admin_no_groups: "（暂无分组）",
+    admin_audit_none: "（暂无记录）",
+    admin_port_label: "端口 {0}",
+    // ---- section captions ----
+    admin_cap_management: "管理",
+    admin_cap_monitoring: "监控",
+    admin_cap_account: "我的账户",
+    // ---- pagination ----
+    prev: "‹ 上一页",
+    next: "下一页 ›",
+    pageOf: "{0} / {1}",
+    // ---- search / copy ----
+    searchUsers: "搜索用户…",
+    searchGroups: "搜索分组…",
+    copy: "复制",
+    copied: "已复制",
+    newSecretDeliver: "新密钥——请复制并安全转交（仅显示一次）",
+    // ---- confirm() / prompt() texts ----
+    confirm_revoke: "吊销 {0}？\n\n将关闭其已开放的端口、清除其会话，并轮换其密钥。该用户必须使用你交付的新密钥重新认证。",
+    confirm_delete_user: "删除用户 {0}？\n\n这将移除该用户、关闭其已开放的端口，且无法撤销。",
+    confirm_delete_group: "删除分组 {0}？\n\n这将移除该分组并关闭其成员的端口。此操作无法撤销。",
+    prompt_totp_revoke: "请输入你的 6 位 TOTP 验证码以确认吊销 {0}：",
+    prompt_totp_delete_user: "请输入你的 6 位 TOTP 验证码以确认删除 {0}：",
+    prompt_totp_delete_group: "请输入你的 6 位 TOTP 验证码以确认删除分组 {0}：",
+    prompt_totp_set_admin: "请输入你的 6 位 TOTP 验证码以确认更改 {0} 的管理员权限：",
+    prompt_set_admin_pin: "设置管理 PIN 码以锁定管理控制台（加密保存的凭据）：",
+    prompt_new_secret: "{0} 的新密钥（请安全复制并交付 — 仅显示一次）：",
+    prompt_totp_disable: "请输入你当前的 TOTP 验证码以禁用双因素认证：",
+    // ---- addLog / status messages ----
+    log_connecting: "连接中…",
+    log_ip_updated: "IP 已更新：{0}{1}",
+    log_was_ip: "（原为 {0}）",
+    log_heartbeat: "心跳正常 - {0}",
+    log_auth_failed: "认证失败：{0}",
+    log_server: "服务器：{0}",
+    log_error: "错误：{0}",
+    log_unknown_error: "未知错误",
+    log_tab_resumed: "标签页恢复，立即发送心跳",
+    log_manual_knock: "手动心跳",
+    log_admin_locked: "管理后台已锁定",
+    log_created_user: "已创建 {0}（完整密钥已在响应中返回 — 请立即复制）",
+    log_created_group: "已创建分组 {0}",
+    log_revoked_new_secret: "已吊销 {0} — 已签发新密钥（仅显示一次）",
+    log_revoked: "已吊销 {0}",
+    log_deleted_user: "已删除用户 {0}",
+    log_deleted_group: "已删除分组 {0}",
+    log_admin_granted: "{0} 现在是管理员",
+    log_admin_revoked: "{0} 不再是管理员",
+    log_group_added: "已将 {0} 添加到 {1}",
+    log_group_removed: "已将 {0} 从 {1} 移除",
+    log_auth_partial: "授权部分完成：{0} 项被拒绝",
+    log_auth_saved: "授权已保存",
+    log_totp_started: "已开始 TOTP 注册 — 将密钥添加到验证器后再激活",
+    log_totp_activated: "TOTP 已激活",
+    log_totp_disabled: "TOTP 已禁用",
+    // ---- error texts ----
+    err_load_failed: "加载失败：{0}",
+    err_some_denied: "部分被拒绝：{0}",
+    err_failed: "失败",
+    err_revoke_failed: "吊销失败",
+    err_delete_failed: "删除失败",
+    err_set_admin_failed: "更改管理员权限失败",
+    err_group_change_failed: "更改分组失败",
+    err_rate_limited: "请求过于频繁，请稍候后重试。",
+    err_http: "服务器返回了非预期响应（HTTP {0}）。",
+    err_enroll_failed: "注册失败",
+    err_activate_failed: "激活失败",
+    err_disable_failed: "禁用失败",
+    // ---- TOTP status ----
+    totp_on: "● 已启用 — 敏感操作需要 6 位验证码",
+    totp_off: "○ 已禁用 — 敏感操作未受双因素保护",
+    totp_secret_html: "密钥（手动输入）：<b>{0}</b><br><br>otpauth URI（用于二维码导入）：<br>{1}",
+  },
+};
+
+function detectLang() {
+  const saved = localStorage.getItem(LANG_KEY);
+  if (saved === "en" || saved === "zh") return saved;
+  const nav = (navigator.language || "en").toLowerCase();
+  return nav.startsWith("zh") ? "zh" : "en";
+}
+
+let lang = detectLang();
+
+// t(key, ...args): localized string with {0}, {1}... positional substitution.
+// Falls back to the English table, then to the raw key, so a missing key is
+// always visible rather than silently blank.
+const t = (k, ...args) => {
+  const tbl = I18N[lang] || I18N.en;
+  let s = (k in tbl) ? tbl[k] : (I18N.en[k] != null ? I18N.en[k] : k);
+  return String(s).replace(/\{(\d+)\}/g, (m, i) => {
+    const v = args[+i];
+    return v === undefined ? m : String(v);
+  });
+};
+
+// Walk static HTML and set textContent / placeholder from the dictionary.
+function applyI18n() {
+  document.documentElement.lang = (lang === "zh") ? "zh-CN" : "en";
+  document.querySelectorAll("[data-i18n]").forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-ph]").forEach(el => {
+    el.setAttribute("placeholder", t(el.dataset.i18nPh));
+  });
+}
+
+// ================================================================ //
+//  DOM references
+// ================================================================ //
+
+const $ = (s) => document.querySelector(s);
+
+// HTML-escape helper — all server-sourced strings interpolated into innerHTML
+// MUST pass through esc() to prevent stored XSS (malicious username/group/IP).
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+const loginView    = $("#login-view");
+const dashView     = $("#dash-view");
+const loginForm    = $("#login-form");
+const loginError   = $("#login-error");
+const fUser        = $("#f-user");
+const fSecret      = $("#f-secret");
+const fRemember    = $("#f-remember");
+const btnConnect   = $("#btn-connect");
+const btnKnock     = $("#btn-knock");
+const btnDisconnect = $("#btn-disconnect");
+const btnAdmin     = $("#btn-admin");
+const fLoginPin    = $("#f-login-pin");
+const pinView      = $("#pin-view");
+const pinForm      = $("#pin-form");
+const pinError     = $("#pin-error");
+const fPin         = $("#f-pin");
+const btnUnlock    = $("#btn-unlock");
+const btnPinCancel = $("#btn-pin-cancel");
+const adminView    = $("#admin-view");
+const adminError   = $("#admin-error");
+const adminUsersEl = $("#admin-users");
+const adminGroupsEl= $("#admin-groups");
+const myGroupsEl   = $("#my-groups");
+const searchUsersEl = $("#search-users");
+const searchGroupsEl = $("#search-groups");
+const usersPagerEl = $("#users-pager");
+const groupsPagerEl = $("#groups-pager");
+const secretBox    = $("#secret-box");
+const secretBoxMsg = $("#secret-box-msg");
+const secretBoxValue = $("#secret-box-value");
+const btnCopySecret = $("#btn-copy-secret");
+const btnDismissSecret = $("#btn-dismiss-secret");
+const btnAddUser   = $("#btn-add-user");
+const btnAddGroup  = $("#btn-add-group");
+const btnSaveAuth  = $("#btn-save-auth");
+const btnAdminBack = $("#btn-admin-back");
+const btnLock      = $("#btn-lock");
+const adminAuditEl = $("#admin-audit");
+const btnRefreshAudit = $("#btn-refresh-audit");
+const totpStatus   = $("#totp-status");
+const totpEnrollBox = $("#totp-enroll");
+const totpSecretEl = $("#totp-secret");
+const btnTotpEnroll = $("#btn-totp-enroll");
+const btnTotpActivate = $("#btn-totp-activate");
+const btnTotpDisable = $("#btn-totp-disable");
+let isAdmin        = false;
+const statusBar    = $("#status-bar");
+const statusText   = $("#status-text");
+const infoUser     = $("#info-user");
+const infoIP       = $("#info-ip");
+const infoCountdown = $("#info-countdown");
+const progressFill = $("#progress");
+const logEl        = $("#log");
+const btnLang      = $("#btn-lang");
+
+// ================================================================ //
+//  State
+// ================================================================ //
+
+let credentials = null;  // { username, secret }
+let knockTimer  = null;  // setInterval ID for knocking
+let tickTimer   = null;  // setInterval ID for countdown tick
+let countdown   = 0;
+let lastKnockTs = 0;     // timestamp of last knock attempt
+let currentIP   = null;
+let isKnocking  = false;
+
+// ================================================================ //
+//  Crypto: HMAC-SHA256 via Web Crypto API
+// ================================================================ //
+
+async function hmacSHA256(secret, message) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw", enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false, ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  return Array.from(new Uint8Array(sig))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function buildAuth(username, secret) {
+  const ts = Math.floor(Date.now() / 1000).toString();
+  const sig = await hmacSHA256(secret, `${username}:${ts}`);
+  return `HMAC-SHA256 ${username}:${ts}:${sig}`;
+}
+
+// ================================================================ //
+//  Crypto: PIN-based vault (PBKDF2 -> AES-GCM). Key never persisted.
+//  localStorage stores only {salt, iv, ciphertext}. The derived key
+//  lives in memory only; losing it (page reload without PIN) = re-login.
+// ================================================================ //
+
+const VAULT_KEY = "ufw-okboy-vault"; // encrypted blob
+const PBKDF2_ITERS = 600000;          // OWASP 2023 min for PBKDF2-SHA256; native Web Crypto
+let vaultKey = null;                  // CryptoKey in memory, never stored
+
+function toB64(buf) {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)));
+}
+function fromB64(s) {
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
+}
+
+async function deriveKey(pin, salt) {
+  const baseKey = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveKey"],
+  );
+  return crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: PBKDF2_ITERS, hash: "SHA-256" },
+    baseKey, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
+  );
+}
+
+async function encryptVault(pin, data) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveKey(pin, salt);
+  const plaintext = new TextEncoder().encode(JSON.stringify(data));
+  const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+  const blob = { salt: toB64(salt), iv: toB64(iv), ct: toB64(ct) };
+  localStorage.setItem(VAULT_KEY, JSON.stringify(blob));
+}
+
+function readVaultBlob() {
+  try { return JSON.parse(localStorage.getItem(VAULT_KEY) || "null"); }
+  catch { return null; }
+}
+
+async function unlockVault(pin) {
+  const blob = readVaultBlob();
+  if (!blob) return null;
+  const salt = fromB64(blob.salt), iv = fromB64(blob.iv);
+  const key = await deriveKey(pin, salt);
+  try {
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, fromB64(blob.ct));
+    vaultKey = key; // keep in memory for this session
+    return JSON.parse(new TextDecoder().decode(pt));
+  } catch { return null; } // wrong PIN
+}
+
+function clearVault() {
+  vaultKey = null;
+  localStorage.removeItem(VAULT_KEY);
+}
+
+// Client-side PIN attempt throttle (UX friction only — trivially bypassed by
+// page reload or console). NOTE: PIN unlock is a LOCAL AES-GCM decrypt of the
+// localStorage vault; it does NOT call the server, so the server-side
+// failed_attempts table (which only tracks HMAC auth failures) does NOT cover
+// PIN brute-force. The real protection against offline attacks is the PBKDF2
+// cost (600k iters) + the vault key never being persisted. Do not rely on this
+// client counter as a security control.
+let pinAttempts = 0, pinLockedUntil = 0;
+
+// ================================================================ //
+//  API calls
+// ================================================================ //
+
+// Idempotent (GET) admin calls auto-retry when an intermediary returns a
+// non-JSON error: the admin console loads several endpoints in parallel, which
+// can momentarily exceed the nginx burst allowance (HTTP 503) — a short backoff
+// lets the token bucket refill before giving up.
+const HTTP_RETRY_MAX = 2;
+const HTTP_RETRY_BASE_MS = 350;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Safely turn a fetch Response into the API's {ok, ...} envelope. The backend
+// always speaks JSON, but an intermediary can return an HTML error page (nginx
+// 429/503 rate-limit, 502/504 while the backend restarts). Parsing HTML as JSON
+// throws a cryptic "Unexpected token '<'"; instead, drain the body and return a
+// clean, status-keyed envelope so every caller's existing r.ok / r.error
+// handling keeps working. JSON error bodies (e.g. the app-level 429 throttle)
+// pass through untouched.
+async function readJson(resp) {
+  const ct = resp.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    try { return await resp.json(); }
+    catch { /* malformed JSON — fall through to the generic envelope */ }
+  } else {
+    try { await resp.text(); } catch { /* free the socket; body is unused */ }
+  }
+  const retriable = [429, 502, 503, 504].includes(resp.status);
+  return {
+    ok: false,
+    error: retriable ? t("err_rate_limited") : t("err_http", resp.status),
+    status: resp.status,
+    retriable,
+  };
+}
+
+async function apiKnock(username, secret) {
+  const auth = await buildAuth(username, secret);
+  const resp = await fetch(`${API_BASE}/api/knock`, {
+    method: "POST",
+    headers: { "Authorization": auth },
+  });
+  return readJson(resp); // 30s knock loop is the retry; just parse safely here
+}
+
+// ================================================================ //
+//  Knock logic
+// ================================================================ //
+
+async function doKnock() {
+  if (!credentials || isKnocking) return;
+  isKnocking = true;
+
+  try {
+    const result = await apiKnock(credentials.username, credentials.secret);
+    lastKnockTs = Date.now();
+
+    if (result.ok) {
+      currentIP = result.ip || currentIP;
+      setStatus("ok", t("status_connected"));
+      infoIP.textContent = currentIP || "-";
+      refreshAdminFlag();
+
+      if (result.changed) {
+        const old = result.old_ip ? t("log_was_ip", result.old_ip) : "";
+        addLog(t("log_ip_updated", currentIP, old), "ok");
+      } else {
+        addLog(t("log_heartbeat", currentIP), "ok");
+      }
+
+      // Show anomaly warning if credential sharing is suspected
+      if (result.warning) {
+        setStatus("warn", t("status_anomaly"));
+        addLog(result.warning, "warn");
+      }
+    } else {
+      // Auth error → the saved credentials are wrong/stale. Clear them so they
+      // are not replayed on the next reload, then disconnect. Rate-limit / 5xx
+      // are NOT auth errors and fall through to the warn branch (creds kept).
+      if (result.error && (
+        result.error.includes("Invalid credentials") ||
+        result.error.includes("expired")
+      )) {
+        addLog(t("log_auth_failed", result.error), "err");
+        forgetCredentials();
+        disconnect(result.error);
+        return;
+      }
+      setStatus("warn", t("status_warning"));
+      addLog(t("log_server", result.error || t("log_unknown_error")), "warn");
+    }
+  } catch (err) {
+    setStatus("err", t("status_network_error"));
+    addLog(t("log_error", err.message), "err");
+  } finally {
+    isKnocking = false;
+    resetCountdown();
+  }
+}
+
+// ================================================================ //
+//  Timer management
+// ================================================================ //
+
+function resetCountdown() {
+  countdown = KNOCK_INTERVAL;
+  updateCountdownDisplay();
+}
+
+function startTimers() {
+  resetCountdown();
+  // Knock timer
+  knockTimer = setInterval(() => doKnock(), KNOCK_INTERVAL * 1000);
+  // UI tick every second
+  tickTimer = setInterval(() => {
+    countdown = Math.max(0, countdown - 1);
+    updateCountdownDisplay();
+  }, 1000);
+}
+
+function stopTimers() {
+  clearInterval(knockTimer);
+  clearInterval(tickTimer);
+  knockTimer = null;
+  tickTimer = null;
+}
+
+function updateCountdownDisplay() {
+  infoCountdown.textContent = `${countdown}s`;
+  const pct = ((KNOCK_INTERVAL - countdown) / KNOCK_INTERVAL) * 100;
+  progressFill.style.width = `${100 - pct}%`;
+}
+
+// ================================================================ //
+//  Connection lifecycle
+// ================================================================ //
+
+async function connect(username, secret, remember) {
+  credentials = { username, secret };
+  // Capture and clear the pending PIN up front so it never lingers across
+  // attempts, regardless of how this connect resolves.
+  const pin = pendingPin;
+  pendingPin = null;
+
+  // Switch views
+  loginView.hidden = true;
+  dashView.hidden = false;
+  infoUser.textContent = username;
+  infoIP.textContent = t("dash_detecting");
+  setStatus("warn", t("status_connecting"));
+  clearLog();
+  addLog(t("log_connecting"), "warn");
+
+  // First knock VALIDATES the credentials before we persist anything. On an
+  // auth failure doKnock clears `credentials` (and any stale saved copy), so we
+  // must not have written them to disk yet — otherwise a typo'd / revoked secret
+  // gets stranded in localStorage or the vault and replays on every reload.
+  await doKnock();
+  if (!credentials) return;
+
+  // Credentials proven good → persist if "Remember" is on, then start the loop.
+  // A PIN encrypts into the vault; without one we fall back to the legacy
+  // plaintext store. The admin console ALWAYS requires PIN unlock regardless.
+  if (remember) {
+    if (pin) {
+      await encryptVault(pin, { username, secret });
+    } else {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ username, secret }));
+    }
+  }
+  startTimers();
+}
+
+function disconnect(reason) {
+  credentials = null;
+  currentIP = null;
+  stopTimers();
+
+  // Switch views
+  dashView.hidden = true;
+  loginView.hidden = false;
+
+  if (reason) {
+    loginError.textContent = reason;
+    loginError.style.display = "block";
+  }
+
+  updateTitle("disconnected");
+}
+
+function forgetCredentials() {
+  localStorage.removeItem(STORAGE_KEY);
+  clearVault();
+}
+
+let pendingPin = null; // PIN captured at login, used to encrypt vault
+
+// ================================================================ //
+//  UI helpers
+// ================================================================ //
+
+function setStatus(level, text) {
+  // level: ok, warn, err, off
+  statusBar.className = `status-bar ${level}`;
+  statusText.textContent = text;
+  updateTitle(level);
+}
+
+function updateTitle(level) {
+  const prefix = { ok: "[OK]", warn: "[...]", err: "[!]", disconnected: "" };
+  const p = prefix[level] || "";
+  document.title = p ? `${p} UFW OkBoy` : "UFW OkBoy";
+}
+
+function addLog(message, type) {
+  const time = new Date().toLocaleTimeString("en-GB", { hour12: false });
+  const entry = document.createElement("div");
+  entry.className = `log-entry ${type || ""}`;
+  entry.textContent = `${time}  ${message}`;
+  logEl.prepend(entry);
+  // Trim old entries
+  while (logEl.children.length > MAX_LOG) {
+    logEl.lastChild.remove();
+  }
+}
+
+function clearLog() {
+  logEl.innerHTML = "";
+}
+
+// ================================================================ //
+//  Page Visibility API: knock immediately when tab becomes visible
+// ================================================================ //
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden || !credentials) return;
+  const elapsed = (Date.now() - lastKnockTs) / 1000;
+  if (elapsed >= KNOCK_INTERVAL) {
+    addLog(t("log_tab_resumed"), "warn");
+    doKnock();
+    // Reset the periodic timer to avoid double-knock
+    stopTimers();
+    startTimers();
+  }
+});
+
+// ================================================================ //
+//  Event handlers
+// ================================================================ //
+
+loginForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  loginError.style.display = "none";
+  const user = fUser.value.trim();
+  const secret = fSecret.value;
+  if (!user || !secret) return;
+  pendingPin = fLoginPin.value || null;
+  btnConnect.disabled = true;
+  btnConnect.textContent = t("login_connecting");
+  await connect(user, secret, fRemember.checked);
+  btnConnect.disabled = false;
+  btnConnect.textContent = t("login_connect");
+});
+
+btnKnock.addEventListener("click", () => {
+  addLog(t("log_manual_knock"), "warn");
+  stopTimers();
+  doKnock().then(() => { if (credentials) startTimers(); });
+});
+
+btnDisconnect.addEventListener("click", () => {
+  forgetCredentials();
+  disconnect();
+});
+
+// ================================================================ //
+//  Auto-connect from saved credentials
+// ================================================================ //
+
+// Two storage modes:
+//  (a) plaintext legacy (STORAGE_KEY) -> direct auto-connect, no PIN
+//  (b) encrypted vault (VAULT_KEY) -> requires PIN to unlock before connect
+(function autoConnect() {
+  try {
+    const plain = localStorage.getItem(STORAGE_KEY);
+    if (plain) {
+      const { username, secret } = JSON.parse(plain);
+      if (username && secret) {
+        fUser.value = username;
+        fSecret.value = secret;
+        connect(username, secret, true);
+      }
+      return;
+    }
+    // Encrypted vault present -> show PIN entry to unlock credentials.
+    if (readVaultBlob()) {
+      pinView.hidden = false;
+      loginView.hidden = true;
+      fPin.focus();
+    }
+  } catch {
+    localStorage.removeItem(STORAGE_KEY);
+  }
+})();
+
+// PIN unlock handler
+pinForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  pinError.style.display = "none";
+  if (Date.now() < pinLockedUntil) {
+    pinError.textContent = t("pin_locked", Math.ceil((pinLockedUntil - Date.now()) / 1000));
+    pinError.style.display = "block";
+    return;
+  }
+  const pin = fPin.value;
+  const data = await unlockVault(pin);
+  if (!data) {
+    pinAttempts += 1;
+    if (pinAttempts >= 5) {
+      pinLockedUntil = Date.now() + 30000; // 30s cooldown
+      pinError.textContent = t("pin_too_many");
+    } else {
+      pinError.textContent = t("pin_wrong", pinAttempts);
+    }
+    pinError.style.display = "block";
+    return;
+  }
+  pinAttempts = 0;
+  pinView.hidden = true;
+  loginView.hidden = false;
+  fUser.value = data.username;
+  fSecret.value = data.secret;
+  pendingPin = pin; // re-encrypt with same PIN on next save
+  await connect(data.username, data.secret, true);
+});
+
+btnPinCancel.addEventListener("click", () => {
+  pinView.hidden = true;
+  loginView.hidden = false;
+  fPin.value = "";
+});
+
+// ================================================================ //
+//  Admin console (gated by PIN unlock)
+// ================================================================ //
+
+async function apiAdmin(method, path, body) {
+  // Only GET is safe to auto-retry — replaying a POST/DELETE could double-apply
+  // a mutation. Non-idempotent calls fail fast and surface a clean message.
+  const idempotent = method === "GET";
+  for (let attempt = 0; ; attempt++) {
+    const auth = await buildAuth(credentials.username, credentials.secret);
+    let data;
+    try {
+      const resp = await fetch(path, {
+        method,
+        headers: { "Authorization": auth, "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+      data = await readJson(resp);
+    } catch (err) {
+      // Network-level failure (offline, DNS, TLS): never throw — return an
+      // envelope so callers' r.ok checks handle it uniformly.
+      data = { ok: false, error: err.message, retriable: true };
+    }
+    if (data.retriable && idempotent && attempt < HTTP_RETRY_MAX) {
+      await sleep(HTTP_RETRY_BASE_MS * (attempt + 1));
+      continue;
+    }
+    return data;
+  }
+}
+
+// After a successful knock, probe admin status to reveal the Admin button.
+async function refreshAdminFlag() {
+  if (!credentials) return;
+  try {
+    const auth = await buildAuth(credentials.username, credentials.secret);
+    const r = await readJson(await fetch("/api/status", { headers: { Authorization: auth } }));
+    isAdmin = !!(r.ok && r.is_admin);
+    btnAdmin.hidden = !isAdmin;
+  } catch { /* ignore */ }
+}
+
+// Open the admin console. Vault must be unlocked (key in memory) or PIN needed.
+btnAdmin.addEventListener("click", async () => {
+  // If credentials came from plaintext (no vault), require a PIN now to
+  // protect the admin page; otherwise the in-memory vault key is sufficient.
+  if (!vaultKey) {
+    if (readVaultBlob()) {
+      // encrypted vault exists but not unlocked this session
+      dashView.hidden = true;
+      pinView.hidden = false;
+      fPin.focus();
+      return;
+    }
+    // No vault yet: prompt to set a PIN to lock admin going forward.
+    const pin = prompt(t("prompt_set_admin_pin"));
+    if (!pin) return;
+    await encryptVault(pin, { username: credentials.username, secret: credentials.secret });
+    localStorage.removeItem(STORAGE_KEY); // drop plaintext now that vault exists
+    await unlockVault(pin);
+  }
+  dashView.hidden = true;
+  adminView.hidden = false;
+  hideSecret(); // never carry a stale revealed secret into a fresh session
+  await loadAdminConsole();
+});
+
+btnAdminBack.addEventListener("click", () => {
+  hideSecret();
+  adminView.hidden = true;
+  dashView.hidden = false;
+});
+
+btnLock.addEventListener("click", () => {
+  vaultKey = null;
+  hideSecret();
+  adminView.hidden = true;
+  // Return to dashboard if still connected, else to login.
+  if (credentials) {
+    dashView.hidden = false;
+    addLog(t("log_admin_locked"), "warn");
+  } else {
+    loginView.hidden = false;
+  }
+});
+
+async function loadAdminConsole() {
+  adminError.style.display = "none";
+  try {
+    const [users, groups, mine, audit] = await Promise.all([
+      apiAdmin("GET", "/api/admin/users"),
+      apiAdmin("GET", "/api/admin/groups"),
+      apiAdmin("GET", "/api/me/groups"),
+      apiAdmin("GET", "/api/admin/audit?limit=50"),
+    ]);
+    // apiAdmin returns an {ok:false} envelope (it no longer throws) on a
+    // non-JSON / HTTP error. Abort the whole load on the first failure with one
+    // clean message instead of rendering half-empty lists.
+    const failed = [users, groups, mine, audit].find((r) => !r || !r.ok);
+    if (failed) throw new Error(failed.error || t("err_failed"));
+    renderUsers(users.users || []);
+    renderGroups(groups.groups || []);
+    renderMyGroups(mine.groups || []);
+    renderAudit(audit.audit || []);
+    await refreshTotp();
+  } catch (err) {
+    adminError.textContent = t("err_load_failed", err.message);
+    adminError.style.display = "block";
+  }
+}
+
+// ---- Secret reveal box (copy-to-clipboard) ---- //
+// Surfaces a one-time secret to the admin in a persistent inline area (not a
+// prompt()), so they can copy it via the clipboard API and dismiss when done.
+let revealedSecret = "";
+function showSecret(secret) {
+  revealedSecret = String(secret == null ? "" : secret);
+  secretBoxMsg.textContent = t("newSecretDeliver");
+  secretBoxValue.textContent = revealedSecret;
+  btnCopySecret.textContent = t("copy");
+  secretBox.hidden = false;
+  // Bring it into view in case the admin is scrolled down the console.
+  secretBox.scrollIntoView({ block: "nearest" });
+}
+function hideSecret() {
+  revealedSecret = "";
+  secretBoxValue.textContent = "";
+  secretBox.hidden = true;
+}
+
+btnCopySecret.addEventListener("click", async () => {
+  const flash = () => {
+    btnCopySecret.textContent = t("copied");
+    setTimeout(() => { btnCopySecret.textContent = t("copy"); }, 1500);
+  };
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(revealedSecret);
+      flash();
+      return;
+    }
+    throw new Error("no clipboard api");
+  } catch {
+    // Fallback: select the secret text so the admin can copy manually.
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(secretBoxValue);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      flash();
+    } catch { /* last-resort no-op */ }
+  }
+});
+
+btnDismissSecret.addEventListener("click", hideSecret);
+
+// Cache of the last-rendered user list so a language toggle (or membership
+// mutation) can re-render without another round-trip. Also tracks which user
+// rows currently have their inline "Manage groups" panel expanded so the state
+// survives a re-render.
+// Client-side pagination helper: filter first (done by caller), then show only
+// the current page. Renders a compact pager into pagerEl and hides it entirely
+// when there is only a single page. Page index is clamped to a valid range so a
+// shrinking list (delete / filter) can never strand the view on an empty page.
+function paginate(items, page) {
+  const total = Math.max(1, Math.ceil(items.length / PAGE_SIZE));
+  const cur = Math.min(Math.max(1, page), total);
+  const start = (cur - 1) * PAGE_SIZE;
+  return { slice: items.slice(start, start + PAGE_SIZE), page: cur, total };
+}
+
+function renderPager(pagerEl, page, total, onGo) {
+  if (total <= 1) { pagerEl.hidden = true; pagerEl.innerHTML = ""; return; }
+  pagerEl.hidden = false;
+  pagerEl.innerHTML =
+    `<button class="btn-secondary btn-small" data-pg="prev" ${page <= 1 ? "disabled" : ""}>${esc(t("prev"))}</button>` +
+    `<span class="pager-info">${esc(t("pageOf", page, total))}</span>` +
+    `<button class="btn-secondary btn-small" data-pg="next" ${page >= total ? "disabled" : ""}>${esc(t("next"))}</button>`;
+  pagerEl.querySelector('[data-pg="prev"]').onclick = () => onGo(page - 1);
+  pagerEl.querySelector('[data-pg="next"]').onclick = () => onGo(page + 1);
+}
+
+let lastUsers = [];
+let userFilter = "";   // case-insensitive substring filter for the Users list
+let userPage = 1;      // current page of the (filtered) Users list
+const openGroupPanels = new Set();
+
+function renderUsers(users) {
+  lastUsers = users;
+  const q = userFilter.trim().toLowerCase();
+  const filtered = q ? users.filter(u => String(u.username).toLowerCase().includes(q)) : users;
+  const pg = paginate(filtered, userPage);
+  userPage = pg.page;
+  adminUsersEl.innerHTML = pg.slice.map(u => {
+    const ip = esc(u.current_ip || "—");
+    const admin = u.is_admin ? ` ${esc(t("admin_tag_admin"))}` : "";
+    const isSelf = credentials && u.username === credentials.username;
+    const adminLbl = u.is_admin ? t("admin_remove_admin") : t("admin_make_admin");
+    const panelOpen = openGroupPanels.has(String(u.id));
+    // Self-row: hide Delete + admin-toggle to prevent self-lockout; keep groups.
+    const adminBtn = isSelf ? "" :
+      `<button class="btn-secondary btn-small" data-setadmin="${esc(u.id)}" data-name="${esc(u.username)}" data-isadmin="${u.is_admin ? "1" : "0"}">${esc(adminLbl)}</button>`;
+    const delBtn = isSelf ? "" :
+      `<button class="btn-link-danger" data-deluser="${esc(u.id)}" data-name="${esc(u.username)}">${esc(t("admin_delete"))}</button>`;
+    const revokeBtn = isSelf ? "" :
+      `<button class="btn-link-danger" data-revoke="${esc(u.id)}" data-name="${esc(u.username)}">${esc(t("admin_revoke"))}</button>`;
+    return `<div style="padding:.35rem 0;border-bottom:1px solid var(--border)">
+      <div>${esc(u.id)}: ${esc(u.username)}${admin} <span style="color:var(--text2)">ip=${ip}</span></div>
+      <div class="user-actions">
+        <button class="btn-secondary btn-small" data-groups="${esc(u.id)}" data-name="${esc(u.username)}">${esc(t("admin_manage_groups"))}</button>
+        ${adminBtn}${revokeBtn}${delBtn}
+      </div>
+      <div class="group-panel" data-panel="${esc(u.id)}" ${panelOpen ? "" : "hidden"} style="margin-top:.35rem;padding-left:.5rem">${panelOpen ? `<span style="color:var(--text2);font-size:.75rem">${esc(t("admin_groups_loading"))}</span>` : ""}</div>
+    </div>`;
+  }).join("");
+  renderPager(usersPagerEl, pg.page, pg.total, (p) => { userPage = p; renderUsers(lastUsers); });
+  // Re-fetch ONLY the open panels whose row is on the current page. Iterating
+  // the whole Set fired an N+1 fetch storm on every re-render (each search
+  // keystroke, pager click, language toggle) and targeted off-page rows whose
+  // panel DOM does not exist. Also prune tracking for users that no longer
+  // exist (deleted), keyed off the full unfiltered list so an active search
+  // filter does not drop a still-open panel.
+  const liveIds = new Set(users.map(u => String(u.id)));
+  for (const id of [...openGroupPanels]) if (!liveIds.has(id)) openGroupPanels.delete(id);
+  const visibleIds = new Set(pg.slice.map(u => String(u.id)));
+  openGroupPanels.forEach(id => { if (visibleIds.has(id)) loadUserGroups(id); });
+}
+
+let lastGroups = [];
+let groupFilter = "";  // case-insensitive substring filter for the Groups list
+let groupPage = 1;     // current page of the (filtered) Groups list
+function renderGroups(groups) {
+  lastGroups = groups;
+  const q = groupFilter.trim().toLowerCase();
+  const filtered = q ? groups.filter(g => String(g.name).toLowerCase().includes(q)) : groups;
+  const pg = paginate(filtered, groupPage);
+  groupPage = pg.page;
+  adminGroupsEl.innerHTML = pg.slice.map(g =>
+    `<div style="padding:.2rem 0;clear:both">${esc(g.id)}: ${esc(g.name)} → ${esc(g.port)}/${esc(g.proto)}
+      <button class="btn-danger btn-small" data-delgroup="${esc(g.id)}" data-name="${esc(g.name)}" style="float:right">${esc(t("admin_delete"))}</button>
+    </div>`
+  ).join("");
+  renderPager(groupsPagerEl, pg.page, pg.total, (p) => { groupPage = p; renderGroups(lastGroups); });
+}
+
+// Fetch + render the per-user group checkboxes into that user's inline panel.
+async function loadUserGroups(userId) {
+  const panel = adminUsersEl.querySelector(`[data-panel="${CSS.escape(String(userId))}"]`);
+  if (!panel) return;
+  try {
+    const r = await apiAdmin("GET", `/api/admin/users/${userId}/groups`);
+    // apiAdmin returns an {ok:false} envelope on error (it no longer throws) —
+    // surface it instead of silently rendering "(no groups)".
+    if (!r.ok) {
+      panel.innerHTML = `<span style="color:var(--red);font-size:.75rem">${esc(r.error || t("err_failed"))}</span>`;
+      return;
+    }
+    const groups = r.groups || [];
+    if (!groups.length) {
+      panel.innerHTML = `<span style="color:var(--text2);font-size:.75rem">${esc(t("admin_no_groups"))}</span>`;
+      return;
+    }
+    panel.innerHTML = groups.map(g => {
+      const checked = (g.is_member && g.enabled) ? "checked" : "";
+      return `<div class="checkbox" style="margin-bottom:.2rem">
+        <input type="checkbox" data-gmember="${esc(userId)}" data-gid="${esc(g.id)}" data-gname="${esc(g.name)}" id="ug-${esc(userId)}-${esc(g.id)}" ${checked}>
+        <label for="ug-${esc(userId)}-${esc(g.id)}" style="margin-bottom:0;font-weight:400">${esc(g.name)} (${esc(t("admin_port_label", g.port))})</label>
+      </div>`;
+    }).join("");
+  } catch (err) {
+    panel.innerHTML = `<span style="color:var(--red);font-size:.75rem">${esc(err.message)}</span>`;
+  }
+}
+
+// Audit log: newest-first event trail (actor / action / target / detail).
+let lastAudit = [];
+function renderAudit(entries) {
+  lastAudit = entries;
+  adminAuditEl.innerHTML = entries.map(e => {
+    const when = esc((e.created_at || "").replace("T", " "));
+    const tgt = e.target ? ` → ${esc(e.target)}` : "";
+    const det = e.detail ? ` <span style="color:var(--text2)">(${esc(e.detail)})</span>` : "";
+    return `<div style="font-size:.75rem;padding:.1rem 0">${when} <b>${esc(e.actor)}</b> ${esc(e.action)}${tgt}${det}</div>`;
+  }).join("") || `<div style="color:var(--text2);font-size:.75rem">${esc(t("admin_audit_none"))}</div>`;
+}
+
+// My group authorization: checkboxes, first checked by default.
+let myGroupsState = [];
+function renderMyGroups(groups) {
+  // On a fresh server load each group has no `checked` field yet: default the
+  // first group to checked, others to their enabled state. On a re-render of an
+  // existing myGroupsState (e.g. language toggle) preserve the in-session
+  // `checked` selection so toggling language does not reset the user's choices.
+  myGroupsState = groups.map((g, i) => ({
+    ...g,
+    checked: ("checked" in g) ? g.checked : (i === 0 ? true : !!g.enabled),
+  }));
+  myGroupsEl.innerHTML = myGroupsState.map((g, i) => `
+    <div class="checkbox" style="margin-bottom:.25rem">
+      <input type="checkbox" data-idx="${i}" id="mg-${esc(g.id)}" ${g.checked ? "checked" : ""}>
+      <label for="mg-${esc(g.id)}" style="margin-bottom:0;font-weight:400">${esc(g.name)} (${esc(t("admin_port_label", g.port))})</label>
+    </div>
+  `).join("");
+  myGroupsEl.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener("change", () => {
+      myGroupsState[+cb.dataset.idx].checked = cb.checked;
+    });
+  });
+}
+
+// Save: toggle each group to match selection via the self-membership route.
+// Server enforces re-enable only for previously-authorized groups (VULN-A).
+// Selection is NOT replayed across sessions — UI rebuilds from /api/me/groups
+// each time the admin console opens.
+btnSaveAuth.addEventListener("click", async () => {
+  adminError.style.display = "none";
+  // Guard against double-submit: a second click mid-save would start an
+  // overlapping PATCH loop plus a racing loadAdminConsole re-render.
+  if (btnSaveAuth.disabled) return;
+  btnSaveAuth.disabled = true;
+  try {
+    let denied = [];
+    for (const g of myGroupsState) {
+      const want = g.checked ? 1 : 0;
+      if (g.enabled === want) continue;
+      const r = await apiAdmin("PATCH", `/api/me/membership/${g.id}`, { enabled: !!want });
+      if (!r.ok) denied.push(`${g.name}: ${r.error || t("err_failed")}`);
+    }
+    await loadAdminConsole();
+    if (denied.length) {
+      adminError.textContent = t("err_some_denied", denied.join("; "));
+      adminError.style.display = "block";
+      addLog(t("log_auth_partial", denied.length), "warn");
+    } else {
+      addLog(t("log_auth_saved"), "ok");
+    }
+  } finally {
+    btnSaveAuth.disabled = false;
+  }
+});
+
+btnAddUser.addEventListener("click", async () => {
+  const username = $("#new-user").value.trim();
+  if (!username) return;
+  const is_admin = $("#new-user-admin").checked;
+  const r = await apiAdmin("POST", "/api/admin/users", { username, is_admin });
+  if (r.ok) {
+    addLog(t("log_created_user", username), "ok");
+    $("#new-user").value = "";
+    await loadAdminConsole();
+    if (r.secret) showSecret(r.secret); // surface after re-render so it stays visible
+  } else { adminError.textContent = r.error || t("err_failed"); adminError.style.display = "block"; }
+});
+
+btnAddGroup.addEventListener("click", async () => {
+  const name = $("#new-group-name").value.trim();
+  const port = parseInt($("#new-group-port").value, 10);
+  if (!name || !port) return;
+  const r = await apiAdmin("POST", "/api/admin/groups", { name, port });
+  if (r.ok) {
+    addLog(t("log_created_group", name), "ok");
+    $("#new-group-name").value = "";
+    $("#new-group-port").value = "";
+    await loadAdminConsole();
+  } else { adminError.textContent = r.error || t("err_failed"); adminError.style.display = "block"; }
+});
+
+// Client-side search/filter: re-render from the cached full lists on input,
+// without a server round-trip. Open membership panels keep working because
+// loadUserGroups() guards on the panel element existing.
+searchUsersEl.addEventListener("input", () => {
+  userFilter = searchUsersEl.value;
+  userPage = 1; // a changed filter always returns to the first page
+  renderUsers(lastUsers);
+});
+searchGroupsEl.addEventListener("input", () => {
+  groupFilter = searchGroupsEl.value;
+  groupPage = 1; // a changed filter always returns to the first page
+  renderGroups(lastGroups);
+});
+
+// Revoke (event-delegated): close ports + clear state + rotate secret =
+// the stateless-HMAC way to force a user to re-authenticate.
+adminUsersEl.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-revoke]");
+  if (!btn) return;
+  const id = btn.dataset.revoke, name = btn.dataset.name;
+  if (!confirm(t("confirm_revoke", name))) return;
+  let r = await apiAdmin("POST", `/api/admin/users/${id}/revoke`, { rotate_secret: true });
+  if (!r.ok && r.totp_required) {
+    const code = prompt(t("prompt_totp_revoke", name));
+    if (!code) return;
+    r = await apiAdmin("POST", `/api/admin/users/${id}/revoke`, { rotate_secret: true, totp_code: code });
+  }
+  if (r.ok) {
+    const newSecret = r.secret;
+    if (newSecret) {
+      addLog(t("log_revoked_new_secret", name), "ok");
+    } else {
+      addLog(t("log_revoked", name), "ok");
+    }
+    await loadAdminConsole();
+    if (newSecret) showSecret(newSecret); // persistent reveal, survives re-render
+  } else {
+    adminError.textContent = r.error || t("err_revoke_failed");
+    adminError.style.display = "block";
+  }
+});
+
+// Delete user (event-delegated, sensitive → TOTP step-up retry like Revoke).
+adminUsersEl.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-deluser]");
+  if (!btn) return;
+  const id = btn.dataset.deluser, name = btn.dataset.name;
+  if (!confirm(t("confirm_delete_user", name))) return;
+  let r = await apiAdmin("DELETE", `/api/admin/users/${id}`);
+  if (!r.ok && r.totp_required) {
+    const code = prompt(t("prompt_totp_delete_user", name));
+    if (!code) return;
+    r = await apiAdmin("DELETE", `/api/admin/users/${id}`, { totp_code: code });
+  }
+  if (r.ok) {
+    openGroupPanels.delete(String(id));
+    addLog(t("log_deleted_user", name), "ok");
+    await loadAdminConsole();
+  } else {
+    adminError.textContent = r.error || t("err_delete_failed");
+    adminError.style.display = "block";
+  }
+});
+
+// Make/Remove admin toggle (event-delegated, sensitive → TOTP step-up retry).
+adminUsersEl.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-setadmin]");
+  if (!btn) return;
+  const id = btn.dataset.setadmin, name = btn.dataset.name;
+  const next = btn.dataset.isadmin !== "1"; // flip current state
+  let r = await apiAdmin("POST", `/api/admin/users/${id}/admin`, { is_admin: next });
+  if (!r.ok && r.totp_required) {
+    const code = prompt(t("prompt_totp_set_admin", name));
+    if (!code) return;
+    r = await apiAdmin("POST", `/api/admin/users/${id}/admin`, { is_admin: next, totp_code: code });
+  }
+  if (r.ok) {
+    addLog(next ? t("log_admin_granted", name) : t("log_admin_revoked", name), "ok");
+    await loadAdminConsole();
+  } else {
+    adminError.textContent = r.error || t("err_set_admin_failed");
+    adminError.style.display = "block";
+  }
+});
+
+// Manage-groups toggle (event-delegated): open/close the inline panel and
+// lazily fetch the per-user group membership state on first open.
+adminUsersEl.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-groups]");
+  if (!btn) return;
+  const id = String(btn.dataset.groups);
+  const panel = adminUsersEl.querySelector(`[data-panel="${CSS.escape(id)}"]`);
+  if (!panel) return;
+  if (panel.hidden) {
+    panel.hidden = false;
+    openGroupPanels.add(id);
+    panel.innerHTML = `<span style="color:var(--text2);font-size:.75rem">${esc(t("admin_groups_loading"))}</span>`;
+    loadUserGroups(id);
+  } else {
+    panel.hidden = true;
+    openGroupPanels.delete(id);
+  }
+});
+
+// Per-user group membership checkbox (event-delegated, change). Checked =
+// authorize (POST .../groups enabled:true); unchecked = remove membership by
+// username + group name. Re-fetch the panel afterwards to reflect server truth.
+adminUsersEl.addEventListener("change", async (e) => {
+  const cb = e.target.closest("[data-gmember]");
+  if (!cb) return;
+  const userId = cb.dataset.gmember;
+  const groupId = cb.dataset.gid;
+  const groupName = cb.dataset.gname;
+  // The username for this row comes from the cached user list.
+  const row = lastUsers.find(u => String(u.id) === String(userId));
+  const username = row ? row.username : "";
+  adminError.style.display = "none";
+  cb.disabled = true;
+  try {
+    let r;
+    if (cb.checked) {
+      r = await apiAdmin("POST", `/api/admin/users/${userId}/groups`, { group_id: Number(groupId), enabled: true });
+      if (r.ok) addLog(t("log_group_added", username, groupName), "ok");
+    } else {
+      r = await apiAdmin("POST", "/api/admin/memberships/remove", { username, group_name: groupName });
+      if (r.ok) addLog(t("log_group_removed", username, groupName), "warn");
+    }
+    if (!r.ok) {
+      adminError.textContent = r.error || t("err_group_change_failed");
+      adminError.style.display = "block";
+    }
+  } catch (err) {
+    adminError.textContent = err.message;
+    adminError.style.display = "block";
+  } finally {
+    // Re-fetch to reflect server truth (also re-enables the checkbox).
+    await loadUserGroups(userId);
+  }
+});
+
+// Delete group (event-delegated, sensitive → TOTP step-up retry like Revoke).
+adminGroupsEl.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-delgroup]");
+  if (!btn) return;
+  const id = btn.dataset.delgroup, name = btn.dataset.name;
+  if (!confirm(t("confirm_delete_group", name))) return;
+  let r = await apiAdmin("DELETE", `/api/admin/groups/${id}`);
+  if (!r.ok && r.totp_required) {
+    const code = prompt(t("prompt_totp_delete_group", name));
+    if (!code) return;
+    r = await apiAdmin("DELETE", `/api/admin/groups/${id}`, { totp_code: code });
+  }
+  if (r.ok) {
+    addLog(t("log_deleted_group", name), "ok");
+    await loadAdminConsole();
+  } else {
+    adminError.textContent = r.error || t("err_delete_failed");
+    adminError.style.display = "block";
+  }
+});
+
+btnRefreshAudit.addEventListener("click", async () => {
+  const r = await apiAdmin("GET", "/api/admin/audit?limit=50");
+  if (r.ok) renderAudit(r.audit || []);
+});
+
+// ---- Two-Factor (TOTP) enrollment ---- //
+async function refreshTotp() {
+  const a = await buildAuth(credentials.username, credentials.secret);
+  const r = await readJson(await fetch("/api/status", { headers: { Authorization: a } }));
+  const on = !!(r.ok && r.totp_enabled);
+  totpStatus.textContent = on ? t("totp_on") : t("totp_off");
+}
+
+btnTotpEnroll.addEventListener("click", async () => {
+  const r = await apiAdmin("POST", "/api/admin/totp/enroll");
+  if (!r.ok) { adminError.textContent = r.error || t("err_enroll_failed"); adminError.style.display = "block"; return; }
+  totpSecretEl.innerHTML = t("totp_secret_html", esc(r.secret), esc(r.otpauth_uri));
+  totpEnrollBox.hidden = false;
+  addLog(t("log_totp_started"), "warn");
+});
+
+btnTotpActivate.addEventListener("click", async () => {
+  const code = $("#totp-code").value.trim();
+  if (!code) return;
+  const r = await apiAdmin("POST", "/api/admin/totp/activate", { totp_code: code });
+  if (r.ok) {
+    addLog(t("log_totp_activated"), "ok");
+    $("#totp-code").value = "";
+    totpEnrollBox.hidden = true;
+    await refreshTotp();
+  } else { adminError.textContent = r.error || t("err_activate_failed"); adminError.style.display = "block"; }
+});
+
+btnTotpDisable.addEventListener("click", async () => {
+  const code = prompt(t("prompt_totp_disable"));
+  if (code === null) return;
+  const r = await apiAdmin("DELETE", "/api/admin/totp", { totp_code: code });
+  if (r.ok) { addLog(t("log_totp_disabled"), "warn"); await refreshTotp(); }
+  else { adminError.textContent = r.error || t("err_disable_failed"); adminError.style.display = "block"; }
+});
+
+// ================================================================ //
+//  Language toggle (中文 / EN)
+// ================================================================ //
+
+// Flip language, persist, re-apply static translations, and re-run any
+// dynamic renders that are currently on screen so JS-built strings switch too.
+btnLang.addEventListener("click", () => {
+  lang = (lang === "zh") ? "en" : "zh";
+  localStorage.setItem(LANG_KEY, lang);
+  applyI18n();
+  // Re-render dynamic content that does not live in [data-i18n] nodes.
+  if (!adminView.hidden) {
+    renderUsers(lastUsers);
+    renderGroups(lastGroups);
+    renderMyGroups(myGroupsState);
+    renderAudit(lastAudit);
+    refreshTotp();
+  }
+  // The secret box message is set imperatively, not via data-i18n — refresh it
+  // (and the Copy label) if the box is currently open.
+  if (!secretBox.hidden) {
+    secretBoxMsg.textContent = t("newSecretDeliver");
+    btnCopySecret.textContent = t("copy");
+  }
+  // Refresh the connect button label if it is mid-flight ("Connecting...").
+  if (btnConnect.disabled) btnConnect.textContent = t("login_connecting");
+});
+
+// Localize static HTML on first load (before first paint).
+applyI18n();
+
+})();
+</script>
+
+</body>
+</html>
