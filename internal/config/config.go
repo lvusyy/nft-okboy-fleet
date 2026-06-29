@@ -51,6 +51,11 @@ type Config struct {
 	NftChain    string `yaml:"nft_chain"`
 	NftPriority int    `yaml:"nft_priority"`
 
+	// Agent-side guard: the agent only opens these ports, refusing any desired
+	// rule from the hub on another port (defense in depth if the hub is
+	// compromised). Empty = no restriction. No effect on the hub itself.
+	AgentAllowedPorts []int `yaml:"agent_allowed_ports"`
+
 	// First-run user seed
 	Users map[string]UserSeed `yaml:"users"`
 }

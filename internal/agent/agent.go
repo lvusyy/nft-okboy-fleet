@@ -20,6 +20,10 @@ type Options struct {
 	NodeName string        // for logging only
 	Interval time.Duration // pull cadence
 	Insecure bool          // skip TLS verification (self-signed hub cert)
+	// AllowedPorts is the node's local guard: when non-empty, the agent opens
+	// ONLY these ports and refuses any hub-supplied rule on another port — so a
+	// compromised hub still cannot tell this node to open, say, SSH. Empty = all.
+	AllowedPorts []int
 }
 
 // rule is one desired allow rule as served by the hub's node desired-state API.
@@ -59,6 +63,7 @@ func Run(ctx context.Context, be firewall.FirewallBackend, opts Options) error {
 		if desired, err := fetch(ctx, client, url, opts.Token); err != nil {
 			log.Printf("agent: pull failed, keeping current rules: %v", err)
 		} else {
+			desired = filterAllowed(desired, opts.AllowedPorts)
 			added, removed, rerr := Reconcile(be, desired)
 			switch {
 			case rerr != nil:
@@ -145,4 +150,31 @@ func Reconcile(be firewall.FirewallBackend, desired []rule) (added, removed int,
 		removed++
 	}
 	return added, removed, err
+}
+
+// filterAllowed drops every desired rule whose port is not in allowed — the
+// node's local guard against a compromised/hostile hub. allowed empty => no
+// filtering (return desired unchanged). Each distinct refused port is logged
+// once per cycle so an attempt to push a forbidden port (e.g. SSH) is visible.
+func filterAllowed(desired []rule, allowed []int) []rule {
+	if len(allowed) == 0 {
+		return desired
+	}
+	ok := make(map[int]bool, len(allowed))
+	for _, p := range allowed {
+		ok[p] = true
+	}
+	var out []rule
+	logged := map[int]bool{}
+	for _, d := range desired {
+		if ok[d.Port] {
+			out = append(out, d)
+			continue
+		}
+		if !logged[d.Port] {
+			logged[d.Port] = true
+			log.Printf("agent: REFUSED hub rule on port %d (not in agent_allowed_ports) — possible hostile hub", d.Port)
+		}
+	}
+	return out
 }

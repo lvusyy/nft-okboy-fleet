@@ -51,6 +51,12 @@ any_18080() {
 		nftables) nft list table inet okboy 2>/dev/null | grep -q 'dport 18080' ;;
 	esac
 }
+port_present() { # port_present <port> : a managed rule for <port> exists
+	case "$AGENT_BACKEND" in
+		ufw)      ufw status numbered | grep -qE "\][[:space:]]+$1/tcp[[:space:]]" ;;
+		nftables) nft list table inet okboy 2>/dev/null | grep -qE "dport $1[[:space:]]" ;;
+	esac
+}
 
 echo "### e2e (agent backend: $AGENT_BACKEND) — inside mount+net namespace, host untouched ###"
 ip link set lo up
@@ -70,6 +76,7 @@ EOF
 cat > "$WORK/agent.yaml" <<EOF
 firewall_backend: $AGENT_BACKEND
 rule_prefix: okboy
+agent_allowed_ports: [18080]
 EOF
 
 "$BIN" -c "$WORK/hub.yaml" serve >"$WORK/hub.log" 2>&1 &
@@ -80,8 +87,13 @@ if curl -fsS http://127.0.0.1:5000/health >/dev/null 2>&1; then ok "hub serving"
 SECRET=$("$BIN" -c "$WORK/hub.yaml" user-add alice | grep -oE '[0-9a-f]{64}' | head -1)
 "$BIN" -c "$WORK/hub.yaml" group-add web 8080 >/dev/null
 "$BIN" -c "$WORK/hub.yaml" user-join alice web >/dev/null
+# A sensitive group on port 22 the hub WILL push, but the agent's allowlist
+# (agent_allowed_ports: [18080]) must REFUSE it — the hub-compromise guard.
+"$BIN" -c "$WORK/hub.yaml" group-add admin 22 >/dev/null
+"$BIN" -c "$WORK/hub.yaml" user-join alice admin >/dev/null
 TOKEN=$("$BIN" -c "$WORK/hub.yaml" node-add edge-1 | grep -oE '[0-9a-f]{64}' | head -1)
 "$BIN" -c "$WORK/hub.yaml" group-target add web edge-1 18080 >/dev/null
+"$BIN" -c "$WORK/hub.yaml" group-target add admin edge-1 22 >/dev/null
 [ -n "$SECRET" ] && ok "user + secret" || fail "no user secret"
 [ -n "$TOKEN" ]  && ok "node + token"  || fail "no node token"
 
@@ -100,6 +112,7 @@ sleep 5
 
 echo "=== managed rules after agent apply ($AGENT_BACKEND) ==="; dump_rules | sed 's/^/    /'
 if has_ip 203.0.113.50; then ok "rule applied: 203.0.113.50 -> 18080"; else fail "rule not applied"; sed 's/^/    agent: /' "$WORK/agent.log"; fi
+if port_present 22; then fail "GUARD BYPASS: port 22 opened despite agent_allowed_ports=[18080]"; else ok "guard: hub's port-22 push REFUSED (agent_allowed_ports)"; fi
 
 knock 203.0.113.99; sleep 5
 if has_ip 203.0.113.99; then ok "rule moved to 203.0.113.99"; else fail "rule not updated"; fi

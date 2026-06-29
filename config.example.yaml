@@ -47,6 +47,12 @@ anomaly_max_changes: 5
 #              enforce). Use on a dedicated hub that only serves desired state.
 firewall_backend: nftables
 
+# Agent-side guard (edge nodes only): the agent opens ONLY these ports, refusing
+# any rule the hub pushes on another port — defense in depth if the hub is
+# compromised (a hostile hub still cannot tell this node to open, say, 22).
+# Empty / omitted = no restriction. No effect on the hub. CLI override: --allow-ports
+# agent_allowed_ports: [18080, 443]
+
 # ---- nftables backend (used when firewall_backend: nftables) ----
 # A dedicated `inet <nft_table>` table with an accept-policy input chain at the
 # given hook priority. It only ever ADDS accept rules, so it coexists with the

@@ -62,3 +62,22 @@ func TestAgentReconcile(t *testing.T) {
 		t.Errorf("expected no managed rules after empty reconcile")
 	}
 }
+
+// TestFilterAllowed is the hub-compromise guard: with an allowlist set, only
+// permitted ports survive; an empty allowlist passes everything (opt-in guard).
+func TestFilterAllowed(t *testing.T) {
+	desired := []rule{
+		{IP: "1.1.1.1", Port: 18080, Proto: "tcp", User: "a", Group: "web"},
+		{IP: "1.1.1.1", Port: 22, Proto: "tcp", User: "a", Group: "ssh"},
+	}
+	if got := filterAllowed(desired, nil); len(got) != 2 {
+		t.Fatalf("nil allowlist must pass all, got %d", len(got))
+	}
+	got := filterAllowed(desired, []int{18080})
+	if len(got) != 1 || got[0].Port != 18080 {
+		t.Fatalf("allowlist [18080] must keep only 18080, got %+v", got)
+	}
+	if len(filterAllowed(desired, []int{443})) != 0 {
+		t.Fatalf("allowlist [443] must drop both 18080 and 22")
+	}
+}
