@@ -1,7 +1,7 @@
 # okboy
 
-[![CI](https://github.com/lvusyy/nft-okboy/actions/workflows/ci.yml/badge.svg)](https://github.com/lvusyy/nft-okboy/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/lvusyy/nft-okboy?sort=semver)](https://github.com/lvusyy/nft-okboy/releases)
+[![CI](https://github.com/lvusyy/nft-okboy-fleet/actions/workflows/ci.yml/badge.svg)](https://github.com/lvusyy/nft-okboy-fleet/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/lvusyy/nft-okboy-fleet?sort=semver)](https://github.com/lvusyy/nft-okboy-fleet/releases)
 [![Go](https://img.shields.io/badge/go-1.22%2B-00ADD8?logo=go&logoColor=white)](https://go.dev)
 ![Platforms](https://img.shields.io/badge/linux-amd64%20%7C%20arm64%20%7C%20armv7%20%7C%20riscv64%20%7C%20ppc64le%20%7C%20s390x%20%7C%20loong64-blue)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -96,7 +96,7 @@ SQLite (pure-Go modernc; users / groups / membership / audit)
 
 ## Platforms
 
-Prebuilt static `linux` binaries are attached to every [release](https://github.com/lvusyy/nft-okboy/releases):
+Prebuilt static `linux` binaries are attached to every [release](https://github.com/lvusyy/nft-okboy-fleet/releases):
 
 | Arch | Target | Typical hardware |
 |------|--------|------------------|
@@ -121,7 +121,7 @@ Prebuilt static `linux` binaries are attached to every [release](https://github.
 ### Install (one command, recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy/main/deploy/install.sh | sudo sh
+curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deploy/install.sh | sudo sh
 ```
 
 The script picks the right binary for your arch (sha256-verified) → writes
@@ -147,8 +147,8 @@ sudo okboy upgrade --check   # check only, do not install
 ### From source / manual
 
 ```bash
-make static                                  # → dist/nft-okboy-linux-amd64 (CGO_ENABLED=0, static)
-#   or: curl -fsSLO https://github.com/lvusyy/nft-okboy/releases/latest/download/nft-okboy-linux-amd64
+make static                                  # → dist/okboy-linux-amd64 (CGO_ENABLED=0, static)
+#   or: curl -fsSLO https://github.com/lvusyy/nft-okboy-fleet/releases/latest/download/okboy-linux-amd64
 cp config.example.yaml config.yaml
 ./okboy gen-secret alice                     # generate a user secret
 ./okboy -c config.yaml user-add alice        # create the user
@@ -231,7 +231,7 @@ reviewed with codex.
 ## Deploy
 
 ```bash
-install -Dm755 dist/nft-okboy-linux-amd64 /opt/okboy/okboy
+install -Dm755 dist/okboy-linux-amd64 /opt/okboy/okboy
 install -Dm600 config.yaml /etc/okboy/config.yaml
 install -Dm644 deploy/okboy.service /etc/systemd/system/okboy.service
 systemctl enable --now okboy

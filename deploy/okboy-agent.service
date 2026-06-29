@@ -1,6 +1,6 @@
 [Unit]
 Description=okboy fleet agent - pulls desired firewall state from the hub
-Documentation=https://github.com/lvusyy/nft-okboy
+Documentation=https://github.com/lvusyy/nft-okboy-fleet
 After=network-online.target nftables.service
 Wants=network-online.target
 

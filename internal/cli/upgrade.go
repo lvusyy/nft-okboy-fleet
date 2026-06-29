@@ -297,7 +297,7 @@ func ghGet(url string) ([]byte, error) {
 
 // assetForHost maps the running platform to its published release asset name, or
 // "" when no prebuilt binary is published for it. The release ships one static
-// binary per linux arch named "nft-okboy-linux-<arch>".
+// binary per linux arch named "okboy-linux-<arch>".
 func assetForHost() string {
 	if runtime.GOOS != "linux" {
 		return ""

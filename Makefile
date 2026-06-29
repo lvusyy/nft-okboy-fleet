@@ -1,7 +1,7 @@
 VERSION := $(shell cat VERSION)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 BIN     := okboy
-DIST    := nft-okboy
+DIST    := okboy
 GO      ?= go
 
 .PHONY: build static release-bins test vet fmt integration release clean

@@ -6,7 +6,7 @@
 #
 #   bash scripts/e2e-test.sh [path/to/okboy]
 set -u
-BIN="${1:-$HOME/nft-okboy/dist/okboy}"
+BIN="${1:-$HOME/nft-okboy-fleet/dist/okboy}"
 NS=okboy_e2e
 TABLE=okboy_e2e
 WORK=/tmp/okboy-e2e

@@ -1,7 +1,7 @@
 #!/bin/sh
 # okboy installer — one command to get a working server.
 #
-#   curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy/main/deploy/install.sh | sudo sh
+#   curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deploy/install.sh | sudo sh
 #
 # Re-run any time to refresh the binary (config + database are preserved).
 # Day-2 upgrades are easier still:  sudo okboy upgrade
@@ -9,7 +9,7 @@
 # Env knobs:  OKBOY_VERSION=v0.2.0  (pin a version)   NO_COLOR=1  (plain output)
 set -eu
 
-REPO="lvusyy/nft-okboy"
+REPO="lvusyy/nft-okboy-fleet"
 RAW="https://raw.githubusercontent.com/$REPO"
 BIN_DIR="/opt/okboy";        BIN="$BIN_DIR/okboy"
 CONF_DIR="/etc/okboy";       CONF="$CONF_DIR/config.yaml"
@@ -42,7 +42,7 @@ case "$(uname -m)" in
   s390x)         ARCH=s390x ;;
   *) die "No prebuilt binary for $(uname -m). Build from source." ;;
 esac
-ASSET="nft-okboy-linux-$ARCH"
+ASSET="okboy-linux-$ARCH"
 for t in curl install sha256sum systemctl; do
   command -v "$t" >/dev/null 2>&1 || die "Required command not found: $t"
 done
