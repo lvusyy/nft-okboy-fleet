@@ -1,5 +1,5 @@
 [Unit]
-Description=okboy - nftables dynamic firewall allowlist manager
+Description=nft-okboy - nftables dynamic firewall allowlist manager
 Documentation=https://github.com/lvusyy/nft-okboy-fleet
 After=network-online.target nftables.service
 Wants=network-online.target
@@ -7,11 +7,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 # A single static binary — no venv, no WSGI server.
-ExecStart=/opt/okboy/okboy -c /etc/okboy/config.yaml serve
+ExecStart=/opt/nft-okboy/nft-okboy -c /etc/nft-okboy/config.yaml serve
 Restart=on-failure
 RestartSec=5
 
-# okboy drives nftables (needs CAP_NET_ADMIN, which root has). Sandbox the rest.
+# nft-okboy drives nftables (needs CAP_NET_ADMIN, which root has). Sandbox the rest.
 # The binary shells out to `nft`; running as root keeps that simple and robust.
 # To run unprivileged instead, switch to a dedicated user plus:
 #   AmbientCapabilities=CAP_NET_ADMIN
@@ -21,7 +21,7 @@ NoNewPrivileges=yes
 ProtectHome=yes
 PrivateTmp=yes
 ProtectSystem=full
-ReadWritePaths=/var/lib/okboy
+ReadWritePaths=/var/lib/nft-okboy
 RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
 
 [Install]

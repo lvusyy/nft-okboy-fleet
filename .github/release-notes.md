@@ -6,11 +6,11 @@
 curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deploy/install.sh | sudo sh
 ```
 
-Already installed?  `sudo okboy upgrade`
+Already installed?  `sudo nft-okboy upgrade`
 
 ## Downloads
 
-Static `CGO_ENABLED=0` binaries for 9 linux arches — pick `okboy-linux-<arch>` (amd64 · arm64 · armv7 · armv6 · 386 · loong64 · ppc64le · riscv64 · s390x) and verify against `SHA256SUMS`.
+Static `CGO_ENABLED=0` binaries for 9 linux arches — pick `nft-okboy-linux-<arch>` (amd64 · arm64 · armv7 · armv6 · 386 · loong64 · ppc64le · riscv64 · s390x) and verify against `SHA256SUMS`.
 
 ## Docs
 

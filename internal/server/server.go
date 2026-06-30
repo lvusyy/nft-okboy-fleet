@@ -102,11 +102,11 @@ func (s *Server) Routes() http.Handler {
 }
 
 // health is the no-auth liveness probe. Shape mirrors app.py's /health plus the
-// version field the Go build surfaces: {"ok":true,"service":"okboy","version":...}.
+// version field the Go build surfaces: {"ok":true,"service":"nft-okboy","version":...}.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":      true,
-		"service": "okboy",
+		"service": "nft-okboy",
 		"version": s.version,
 	})
 }

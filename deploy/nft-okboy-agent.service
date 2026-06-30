@@ -1,5 +1,5 @@
 [Unit]
-Description=okboy fleet agent - pulls desired firewall state from the hub
+Description=nft-okboy fleet agent - pulls desired firewall state from the hub
 Documentation=https://github.com/lvusyy/nft-okboy-fleet
 After=network-online.target nftables.service
 Wants=network-online.target
@@ -7,15 +7,15 @@ Wants=network-online.target
 [Service]
 Type=simple
 # Hub URL, node name and enrollment token live in a 0600 env file (NOT in this
-# unit, so the token never lands in the journal), e.g. /etc/okboy/agent.env:
-#   OKBOY_HUB=https://hub.example/
-#   OKBOY_NODE=edge-1
-#   OKBOY_TOKEN=<64-hex token from `okboy node-add`>
-EnvironmentFile=/etc/okboy/agent.env
+# unit, so the token never lands in the journal), e.g. /etc/nft-okboy/agent.env:
+#   NFT_OKBOY_HUB=https://hub.example/
+#   NFT_OKBOY_NODE=edge-1
+#   NFT_OKBOY_TOKEN=<64-hex token from `nft-okboy node-add`>
+EnvironmentFile=/etc/nft-okboy/agent.env
 # The agent reads only the firewall backend + rule_prefix from agent.yaml; it
 # holds NO database and opens NO listening port — it dials OUT to the hub only.
-ExecStart=/opt/okboy/okboy -c /etc/okboy/agent.yaml agent \
-    --hub ${OKBOY_HUB} --node ${OKBOY_NODE} --token ${OKBOY_TOKEN} --interval 15
+ExecStart=/opt/nft-okboy/nft-okboy -c /etc/nft-okboy/agent.yaml agent \
+    --hub ${NFT_OKBOY_HUB} --node ${NFT_OKBOY_NODE} --token ${NFT_OKBOY_TOKEN} --interval 15
 Restart=on-failure
 RestartSec=5
 

@@ -23,15 +23,15 @@ jobs:
           mkdir -p dist
           V="${GITHUB_REF_NAME#v}"; LD="-s -w -X main.version=$V"
           for arch in amd64 386 arm64 riscv64 ppc64le s390x loong64; do
-            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "$LD" -o dist/okboy-linux-$arch ./cmd/okboy
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-$arch ./cmd/nft-okboy
           done
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags "$LD" -o dist/okboy-linux-armv7 ./cmd/okboy
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -trimpath -ldflags "$LD" -o dist/okboy-linux-armv6 ./cmd/okboy
-          ( cd dist && sha256sum okboy-linux-* > SHA256SUMS )
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-armv7 ./cmd/nft-okboy
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-armv6 ./cmd/nft-okboy
+          ( cd dist && sha256sum nft-okboy-linux-* > SHA256SUMS )
       - name: publish release with binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/okboy-linux-* dist/SHA256SUMS \
-            --title "OkBoy Fleet ${GITHUB_REF_NAME}" \
+          gh release create "${GITHUB_REF_NAME}" dist/nft-okboy-linux-* dist/SHA256SUMS \
+            --title "nft-nft-okboy Fleet ${GITHUB_REF_NAME}" \
             --notes-file .github/release-notes.md --generate-notes

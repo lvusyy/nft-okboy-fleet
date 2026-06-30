@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-<title>UFW OkBoy</title>
+<title>nft-okboy</title>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -471,7 +471,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 <div class="container">
   <header>
     <button type="button" id="btn-lang" class="lang-toggle">中文 / EN</button>
-    <h1>UFW OkBoy</h1>
+    <h1>nft-okboy</h1>
     <p data-i18n="app_subtitle">Dynamic Firewall Allowlist</p>
   </header>
 
@@ -1357,7 +1357,7 @@ function setStatus(level, text) {
 function updateTitle(level) {
   const prefix = { ok: "[OK]", warn: "[...]", err: "[!]", disconnected: "" };
   const p = prefix[level] || "";
-  document.title = p ? `${p} UFW OkBoy` : "UFW OkBoy";
+  document.title = p ? `${p} nft-okboy` : "nft-okboy";
 }
 
 function addLog(message, type) {

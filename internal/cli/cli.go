@@ -1,8 +1,8 @@
-// Package cli holds the okboy subcommand handlers — a faithful Go port of the
+// Package cli holds the nft-okboy subcommand handlers — a faithful Go port of the
 // cmd_* functions in the Python server/app.py. Each exported Cmd* function owns
 // its own flag.FlagSet for sub-flags (--admin, --proto, --max-age, ...), parses
 // the positional args, and performs the same DB + firewall side effects as its
-// Python counterpart. The cmd/okboy main only dispatches into these.
+// Python counterpart. The cmd/nft-okboy main only dispatches into these.
 package cli
 
 import (
@@ -26,7 +26,7 @@ import (
 )
 
 // totpIssuer labels otpauth:// URIs (matches the Python issuer string).
-const totpIssuer = "okboy"
+const totpIssuer = "nft-okboy"
 
 // ====================================================================== //
 //  Shared helpers
@@ -223,7 +223,7 @@ func CmdServe(cfgPath, version string, args []string) error {
 
 	addr := fmt.Sprintf("%s:%d", cfg.ListenHost, cfg.ListenPort)
 	httpSrv := &http.Server{Addr: addr, Handler: srv.Routes()}
-	log.Printf("okboy %s starting on %s", version, addr)
+	log.Printf("nft-okboy %s starting on %s", version, addr)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server error: %w", err)
 	}
@@ -813,7 +813,7 @@ func CmdBackup(cfgPath string, args []string) error {
 		return fmt.Errorf("create backup dir %q: %w", backupDir, err)
 	}
 	stamp := time.Now().Format("20060102-150405.000000")
-	dest := filepath.Join(backupDir, fmt.Sprintf("okboy-%s.db", stamp))
+	dest := filepath.Join(backupDir, fmt.Sprintf("nft-okboy-%s.db", stamp))
 
 	digest, err := d.Backup(dest) // also writes the .sha256 sidecar
 	if err != nil {
@@ -827,14 +827,14 @@ func CmdBackup(cfgPath string, args []string) error {
 	return nil
 }
 
-// pruneBackups enforces rolling retention: keep the newest `keep` okboy-*.db
+// pruneBackups enforces rolling retention: keep the newest `keep` nft-okboy-*.db
 // backups (and their .sha256 sidecars), removing the rest. keep <= 0 disables
 // pruning, matching the Python guard.
 func pruneBackups(dir string, keep int) {
 	if keep <= 0 {
 		return
 	}
-	matches, err := filepath.Glob(filepath.Join(dir, "okboy-*.db"))
+	matches, err := filepath.Glob(filepath.Join(dir, "nft-okboy-*.db"))
 	if err != nil || len(matches) <= keep {
 		return
 	}

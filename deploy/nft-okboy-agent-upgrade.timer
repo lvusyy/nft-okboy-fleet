@@ -1,5 +1,5 @@
 [Unit]
-Description=Periodic okboy agent self-upgrade
+Description=Periodic nft-okboy agent self-upgrade
 
 [Timer]
 OnCalendar=daily

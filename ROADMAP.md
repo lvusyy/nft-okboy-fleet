@@ -20,7 +20,7 @@ root 管理服务 = N 个攻击面 + N 倍运维。
 |---|---|
 | 主干代码基 | **Go**（种子自 nft-okboy）；ufw-okboy(Python) 在 C1 功能等价后冻结为 legacy |
 | 队列规模 | **10–100 台，云 + 本地/NAT 混合** |
-| 形态 | **一个二进制 `okboy`，三模式 `standalone\|hub\|agent`**，config 驱动 |
+| 形态 | **一个二进制 `nft-okboy`，三模式 `standalone\|hub\|agent`**，config 驱动 |
 | 后端 | **可插拔 `firewall.Backend`：nftables / ufw**（一个 hub 管异构队列） |
 
 ## 架构
@@ -47,7 +47,7 @@ root 管理服务 = N 个攻击面 + N 倍运维。
 ## 贯穿性原则
 
 1. **向后兼容神圣不可侵犯**：`standalone` 模式行为永不改变；hub/agent 是新增拓扑，不是替换。
-2. **Agent 无状态**：managed 规则由防火墙里 `okboy:user:group` 前缀自描述，拉到期望集做幂等 diff。
+2. **Agent 无状态**：managed 规则由防火墙里 `nft-okboy:user:group` 前缀自描述，拉到期望集做幂等 diff。
 3. **故障安全**：hub 不可达时 agent 保留 last-known-good，**绝不 panic 关、绝不擅自开**。
 4. **纵深防御**：agent 本地 `max_ports` 白名单，即便 hub 被攻破也开不了 SSH。
 
@@ -76,7 +76,7 @@ root 管理服务 = N 个攻击面 + N 倍运维。
 ## 目录演进
 
 ```
-cmd/okboy/              统一入口（已有；加 --mode 分发）
+cmd/nft-okboy/              统一入口（已有；加 --mode 分发）
 internal/firewall/      backend.go(已有) + nft.go(已有) + mock.go(已有) + ufw.go(C1 新增)
 internal/auth/          HMAC+TOTP（已有）+ node mTLS（C2 新增）
 internal/db/            + nodes / group_targets（C2 新增）
@@ -102,15 +102,15 @@ C1–C4 **已完成并实体验证**，项目可交付：
 
 ## 部署 fleet
 
-- **Hub**（控制面）：`okboy -c hub.yaml serve`，`firewall_backend: none`（纯控制面）或 `nftables`（兼自保护）；前置 nginx TLS（复用 `deploy/`）。
-- **Agent**（每边缘节点）：`deploy/okboy-agent.service` + `/etc/okboy/agent.env`（`OKBOY_HUB`/`OKBOY_NODE`/`OKBOY_TOKEN`）+ `agent.yaml`（`firewall_backend: ufw|nftables`）。节点**只出站、无 DB、不监听公网**。
+- **Hub**（控制面）：`nft-okboy -c hub.yaml serve`，`firewall_backend: none`（纯控制面）或 `nftables`（兼自保护）；前置 nginx TLS（复用 `deploy/`）。
+- **Agent**（每边缘节点）：`deploy/nft-okboy-agent.service` + `/etc/nft-okboy/agent.env`（`NFT_OKBOY_HUB`/`NFT_OKBOY_NODE`/`NFT_OKBOY_TOKEN`）+ `agent.yaml`（`firewall_backend: ufw|nftables`）。节点**只出站、无 DB、不监听公网**。
 
 ```bash
 # Hub 端：注册节点 + 配置目标 + 授权用户
-okboy -c hub.yaml node-add edge-1            # 打印一次性 token
-okboy -c hub.yaml group-add web 8080
-okboy -c hub.yaml group-target add web edge-1 18080
-okboy -c hub.yaml user-join alice web
-# Edge 端：token 写入 /etc/okboy/agent.env，起 agent
-systemctl enable --now okboy-agent
+nft-okboy -c hub.yaml node-add edge-1            # 打印一次性 token
+nft-okboy -c hub.yaml group-add web 8080
+nft-okboy -c hub.yaml group-target add web edge-1 18080
+nft-okboy -c hub.yaml user-join alice web
+# Edge 端：token 写入 /etc/nft-okboy/agent.env，起 agent
+systemctl enable --now nft-okboy-agent
 ```

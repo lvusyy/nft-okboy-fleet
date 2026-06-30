@@ -1,6 +1,6 @@
-# okboy — nftables dynamic firewall allowlist manager (server config)
+# nft-okboy — nftables dynamic firewall allowlist manager (server config)
 # Copy to config.yaml and edit. The server reads -c/--config, else
-# /etc/okboy/config.yaml, else a config.yaml next to the binary.
+# /etc/nft-okboy/config.yaml, else a config.yaml next to the binary.
 
 # The server listens here (behind nginx). Bind localhost only.
 listen_host: 127.0.0.1
@@ -14,7 +14,7 @@ proto: tcp
 
 # ---- Security ----
 signature_ttl: 300            # HMAC timestamp window, seconds
-rule_prefix: okboy            # rule comment = <prefix>:<user>:<group> (nft & ufw)
+rule_prefix: nft-okboy            # rule comment = <prefix>:<user>:<group> (nft & ufw)
 
 # X-Real-IP / X-Forwarded-For are trusted ONLY when the direct peer is in this
 # list (your reverse proxy). A direct client cannot then spoof its registered IP.
@@ -58,18 +58,18 @@ firewall_backend: nftables
 # given hook priority. It only ever ADDS accept rules, so it coexists with the
 # host / k8s (Calico/Cilium/kube-proxy) firewall in their own tables and never
 # drops traffic of its own accord.
-nft_table: okboy
+nft_table: nft_okboy
 nft_chain: input
 nft_priority: -150
 
 # ---- Storage ----
-db_path: /var/lib/okboy/okboy.db
-backup_dir: /var/lib/okboy/backups
+db_path: /var/lib/nft-okboy/nft-okboy.db
+backup_dir: /var/lib/nft-okboy/backups
 backup_keep: 7
 
 # ---- First-run user seed (optional) ----
 # On a FRESH db these users are created once. Generate a secret with:
-#   okboy gen-secret alice
+#   nft-okboy gen-secret alice
 # users:
 #   admin:
 #     secret: "<64 hex chars>"

@@ -398,7 +398,7 @@ func (s *Server) adminRevokeUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(fwFailed) > 0 {
 		resp["warning"] = "firewall rule removal failed for groups: " + strings.Join(fwFailed, ", ") +
-			" — run 'okboy cleanup' or check nftables"
+			" — run 'nft-okboy cleanup' or check nftables"
 		_ = s.db.LogAudit(user.Username, "revoke_fw_error", strPtr(target.Username), strPtr(strings.Join(fwFailed, ",")))
 	}
 	writeJSON(w, http.StatusOK, resp)

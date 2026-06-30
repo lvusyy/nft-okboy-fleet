@@ -23,7 +23,7 @@ func keyset(t *testing.T, be *firewall.MockBackend) map[string]bool {
 // a stale managed rule is dropped, the two desired rules are added, and a second
 // pass is a no-op (idempotent) — the exact contract the agent loop relies on.
 func TestAgentReconcile(t *testing.T) {
-	be := firewall.NewMockBackend("okboy")
+	be := firewall.NewMockBackend("nft-okboy")
 	// A managed rule that is NO LONGER desired (e.g. the user's IP changed / left).
 	if err := be.AddRule("198.51.100.9", 22, "carol", "tcp", "ssh"); err != nil {
 		t.Fatal(err)

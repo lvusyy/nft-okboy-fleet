@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# End-to-end functional test: a REAL okboy server + REAL HMAC knock + REAL
+# End-to-end functional test: a REAL nft-okboy server + REAL HMAC knock + REAL
 # nftables, all inside an isolated network namespace so it never touches the
 # host / k8s firewall. Validates the full HTTP -> auth -> firewall -> db -> nft
 # chain. Run on Linux as a user with passwordless sudo:
 #
-#   bash scripts/e2e-test.sh [path/to/okboy]
+#   bash scripts/e2e-test.sh [path/to/nft-okboy]
 set -u
-BIN="${1:-$HOME/nft-okboy-fleet/dist/okboy}"
+BIN="${1:-$HOME/nft-okboy-fleet/dist/nft-okboy}"
 NS=okboy_e2e
 TABLE=okboy_e2e
-WORK=/tmp/okboy-e2e
+WORK=/tmp/nft-okboy-e2e
 PASS=0
 FAIL=0
 chk() { if eval "$2"; then echo "  PASS: $1"; PASS=$((PASS + 1)); else echo "  FAIL: $1"; FAIL=$((FAIL + 1)); fi; }
@@ -21,12 +21,12 @@ cat > "$WORK/config.yaml" <<EOF
 listen_host: 127.0.0.1
 listen_port: 5000
 proto: tcp
-rule_prefix: okboy
+rule_prefix: nft-okboy
 trusted_proxies: ["127.0.0.1", "::1"]
 nft_table: $TABLE
 nft_chain: input
 nft_priority: -150
-db_path: $WORK/okboy.db
+db_path: $WORK/nft-okboy.db
 backup_dir: $WORK/backups
 EOF
 
@@ -55,7 +55,7 @@ echo "== knock 1: 203.0.113.50 =="
 R1=$(knock 203.0.113.50); echo "  resp: $R1"
 chk "knock1 changed=true" 'echo "$R1" | grep -q "\"changed\": *true"'
 N1=$(nftdump)
-chk "nft rule: 203.0.113.50 dport 22 comment okboy:alice:ssh" 'echo "$N1" | grep -q "203.0.113.50" && echo "$N1" | grep -q "okboy:alice:ssh" && echo "$N1" | grep -q "dport 22"'
+chk "nft rule: 203.0.113.50 dport 22 comment nft-okboy:alice:ssh" 'echo "$N1" | grep -q "203.0.113.50" && echo "$N1" | grep -q "nft-okboy:alice:ssh" && echo "$N1" | grep -q "dport 22"'
 
 echo "== knock 2: 198.51.100.7 (IP change) =="
 R2=$(knock 198.51.100.7); echo "  resp: $R2"

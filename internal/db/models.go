@@ -93,7 +93,7 @@ type GroupTargetView struct {
 }
 
 // DesiredRule is one allow rule an agent must enforce: the user's current IP may
-// reach (Port, Proto). User+Group build the okboy comment so the agent's
+// reach (Port, Proto). User+Group build the nft-okboy comment so the agent's
 // reconcile keys on the same identity the firewall backends use.
 type DesiredRule struct {
 	IP    string

@@ -93,7 +93,7 @@ func (u *UfwBackend) EnsureBase() error {
 		return err
 	}
 	if !strings.Contains(out, "Status: active") {
-		log.Printf("ufw: firewall is INACTIVE — okboy rules will not enforce until `ufw enable` (allow SSH first!)")
+		log.Printf("ufw: firewall is INACTIVE — nft-okboy rules will not enforce until `ufw enable` (allow SSH first!)")
 	}
 	return nil
 }
@@ -205,7 +205,7 @@ var (
 	ufwBodyRe = regexp.MustCompile(`^(\d+)/(\w+)(?:\s+\(v6\))?\s+ALLOW\s+IN\s+(\S+)`)
 )
 
-// parseUfwStatus extracts the okboy-managed rules from `ufw status numbered`
+// parseUfwStatus extracts the nft-okboy-managed rules from `ufw status numbered`
 // output. It keeps only rules whose comment starts "<prefix>:"; anything that
 // does not match the expected shape is skipped (tolerant, like the nft parser).
 // Each rule gets a stable synthetic Handle derived from its identity.

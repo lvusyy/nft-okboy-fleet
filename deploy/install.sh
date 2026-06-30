@@ -1,20 +1,20 @@
 #!/bin/sh
-# okboy installer — one command to get a working server.
+# nft-okboy installer — one command to get a working server.
 #
 #   curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deploy/install.sh | sudo sh
 #
 # Re-run any time to refresh the binary (config + database are preserved).
-# Day-2 upgrades are easier still:  sudo okboy upgrade
+# Day-2 upgrades are easier still:  sudo nft-okboy upgrade
 #
-# Env knobs:  OKBOY_VERSION=v0.2.0  (pin a version)   NO_COLOR=1  (plain output)
+# Env knobs:  NFT_OKBOY_VERSION=v0.2.0  (pin a version)   NO_COLOR=1  (plain output)
 set -eu
 
 REPO="lvusyy/nft-okboy-fleet"
 RAW="https://raw.githubusercontent.com/$REPO"
-BIN_DIR="/opt/okboy";        BIN="$BIN_DIR/okboy"
-CONF_DIR="/etc/okboy";       CONF="$CONF_DIR/config.yaml"
-DATA_DIR="/var/lib/okboy"
-UNIT="/etc/systemd/system/okboy.service"
+BIN_DIR="/opt/nft-okboy";        BIN="$BIN_DIR/nft-okboy"
+CONF_DIR="/etc/nft-okboy";       CONF="$CONF_DIR/config.yaml"
+DATA_DIR="/var/lib/nft-okboy"
+UNIT="/etc/systemd/system/nft-okboy.service"
 
 # ---- pretty output (auto-disabled when not a TTY or NO_COLOR set) ----
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -29,7 +29,7 @@ die()  { printf "${RD}✗ %s${X}\n" "$*" >&2; exit 1; }
 
 # ---- preflight ----
 [ "$(id -u)" = 0 ] || die "Please run as root (use sudo)."
-[ "$(uname -s)" = "Linux" ] || die "okboy runs on Linux only."
+[ "$(uname -s)" = "Linux" ] || die "nft-okboy runs on Linux only."
 case "$(uname -m)" in
   x86_64|amd64)  ARCH=amd64 ;;
   aarch64|arm64) ARCH=arm64 ;;
@@ -42,14 +42,14 @@ case "$(uname -m)" in
   s390x)         ARCH=s390x ;;
   *) die "No prebuilt binary for $(uname -m). Build from source." ;;
 esac
-ASSET="okboy-linux-$ARCH"
+ASSET="nft-okboy-linux-$ARCH"
 for t in curl install sha256sum systemctl; do
   command -v "$t" >/dev/null 2>&1 || die "Required command not found: $t"
 done
-command -v nft >/dev/null 2>&1 || warn "nft (nftables) is not installed — install it before starting okboy."
+command -v nft >/dev/null 2>&1 || warn "nft (nftables) is not installed — install it before starting nft-okboy."
 
-# ---- resolve version (latest release, or OKBOY_VERSION) ----
-VER="${OKBOY_VERSION:-}"
+# ---- resolve version (latest release, or NFT_OKBOY_VERSION) ----
+VER="${NFT_OKBOY_VERSION:-}"
 if [ -z "$VER" ]; then
   # Resolve the latest tag from the releases/latest redirect (not the GitHub API),
   # so it works through the SAME CN-friendly mirrors as the downloads — the API host
@@ -60,7 +60,7 @@ if [ -z "$VER" ]; then
           "${pre}https://github.com/$REPO/releases/latest" 2>/dev/null | sed -n 's#.*/tag/##p')
     [ -n "$VER" ] && break
   done
-  [ -n "$VER" ] || die "Could not resolve the latest release. Set OKBOY_VERSION=vX.Y.Z and retry."
+  [ -n "$VER" ] || die "Could not resolve the latest release. Set NFT_OKBOY_VERSION=vX.Y.Z and retry."
 fi
 
 # ---- download helper: try direct, then CN-friendly mirrors ----
@@ -81,11 +81,11 @@ dl() { # dl <github-url> <out>
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-say "Downloading okboy $VER ($ASSET)…"
-dl "https://github.com/$REPO/releases/download/$VER/$ASSET" "$TMP/okboy" || die "Download failed."
+say "Downloading nft-okboy $VER ($ASSET)…"
+dl "https://github.com/$REPO/releases/download/$VER/$ASSET" "$TMP/nft-okboy" || die "Download failed."
 if dl "https://github.com/$REPO/releases/download/$VER/SHA256SUMS" "$TMP/sums"; then
   exp=$(awk -v f="$ASSET" '$2==f {print $1}' "$TMP/sums")
-  got=$(sha256sum "$TMP/okboy" | cut -d' ' -f1)
+  got=$(sha256sum "$TMP/nft-okboy" | cut -d' ' -f1)
   [ -n "$exp" ] && [ "$exp" = "$got" ] || die "Checksum mismatch — aborting."
   ok "checksum verified"
 else
@@ -97,7 +97,7 @@ UPGRADE=0; [ -x "$BIN" ] && UPGRADE=1
 # ---- install binary + data dir ----
 install -d -m 755 "$BIN_DIR"
 install -d -m 700 "$DATA_DIR"
-install -m 755 "$TMP/okboy" "$BIN"
+install -m 755 "$TMP/nft-okboy" "$BIN"
 ok "binary → $BIN ($VER)"
 
 # ---- config (written once; an existing config is never overwritten) ----
@@ -112,10 +112,10 @@ fi
 
 # ---- systemd unit ----
 if [ ! -f "$UNIT" ]; then
-  dl "$RAW/$VER/deploy/okboy.service" "$TMP/unit" || die "Could not fetch the systemd unit."
+  dl "$RAW/$VER/deploy/nft-okboy.service" "$TMP/unit" || die "Could not fetch the systemd unit."
   install -m 644 "$TMP/unit" "$UNIT"
   systemctl daemon-reload
-  systemctl enable okboy >/dev/null 2>&1 || true
+  systemctl enable nft-okboy >/dev/null 2>&1 || true
   ok "service installed and enabled at boot"
 fi
 
@@ -128,26 +128,26 @@ if [ "$UPGRADE" = 0 ]; then
 fi
 
 # ---- (re)start ----
-systemctl restart okboy 2>/dev/null || true
+systemctl restart nft-okboy 2>/dev/null || true
 sleep 1
-if systemctl is-active --quiet okboy; then
-  ok "okboy is running"
+if systemctl is-active --quiet nft-okboy; then
+  ok "nft-okboy is running"
 else
-  warn "service is not active yet — check: journalctl -u okboy -e"
+  warn "service is not active yet — check: journalctl -u nft-okboy -e"
 fi
 
 # ---- summary (credentials LAST, highlighted) ----
 echo
 if [ "$UPGRADE" = 1 ]; then
   ok "Upgraded to $VER. Config and database were preserved."
-  echo "  Manage:  okboy user-list   |   Upgrade later:  sudo okboy upgrade"
+  echo "  Manage:  nft-okboy user-list   |   Upgrade later:  sudo nft-okboy upgrade"
   exit 0
 fi
 
 printf "${B}════════════════════════════════════════════════════════════${X}\n"
-ok "okboy $VER installed."
+ok "nft-okboy $VER installed."
 echo
-echo "  Web console:  https://<your-domain>/   (set up nginx + TLS — see deploy/nginx-okboy.conf)"
+echo "  Web console:  https://<your-domain>/   (set up nginx + TLS — see deploy/nginx-nft-okboy.conf)"
 echo "  Local check:  curl -s http://127.0.0.1:5000/health"
 echo
 if [ -n "$SECRET" ]; then
@@ -155,13 +155,13 @@ if [ -n "$SECRET" ]; then
   printf "    username:  ${B}admin${X}\n"
   printf "    secret:    ${B}%s${X}\n" "$SECRET"
 else
-  warn "Could not auto-create admin. Create one with: okboy user-add <name> --admin"
+  warn "Could not auto-create admin. Create one with: nft-okboy user-add <name> --admin"
 fi
 printf "${B}════════════════════════════════════════════════════════════${X}\n"
 echo
 echo "  Next: open a port group and authorize the admin, e.g."
-echo "    okboy group-add ssh 22"
-echo "    okboy user-join admin ssh"
+echo "    nft-okboy group-add ssh 22"
+echo "    nft-okboy user-join admin ssh"
 echo
 echo "  Then open the Web console, enter username + secret, and Connect."
-echo "  Upgrade any time:  sudo okboy upgrade"
+echo "  Upgrade any time:  sudo nft-okboy upgrade"

@@ -20,7 +20,7 @@ import (
 func TestNftIntegration(t *testing.T) {
 	const table = "okboy_it" // isolated test table name; never collides with host rules
 
-	be, err := NewNftBackend(NftConfig{Prefix: "okboy", Table: table, Chain: "input", Priority: -150})
+	be, err := NewNftBackend(NftConfig{Prefix: "nft-okboy", Table: table, Chain: "input", Priority: -150})
 	if err != nil {
 		t.Fatalf("NewNftBackend: %v", err)
 	}

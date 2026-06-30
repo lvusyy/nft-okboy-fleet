@@ -40,7 +40,7 @@ func CmdNodeAdd(cfgPath string, args []string) error {
 	audit(d, "node_add", name, "")
 	fmt.Printf("Created node '%s'.\n\n", name)
 	fmt.Printf("Enrollment token (shown ONCE — configure the agent with it):\n\n  %s\n\n", token)
-	fmt.Printf("On the node, run the agent:\n  okboy agent --hub https://<hub>/ --node %s --token %s\n", name, token)
+	fmt.Printf("On the node, run the agent:\n  nft-okboy agent --hub https://<hub>/ --node %s --token %s\n", name, token)
 	return nil
 }
 

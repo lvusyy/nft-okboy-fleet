@@ -27,7 +27,7 @@ const upgradeRepo = "lvusyy/nft-okboy-fleet"
 // rest are public CN-friendly reverse proxies (see ghproxy.link for live ones).
 var ghMirrors = []string{"", "https://ghfast.top/", "https://gh-proxy.com/"}
 
-// CmdUpgrade self-updates the running okboy binary to the latest GitHub release
+// CmdUpgrade self-updates the running nft-okboy binary to the latest GitHub release
 // (or a pinned --version). It is the day-2 counterpart of deploy/install.sh:
 //
 //  1. resolve the target tag (latest release, or --version);
@@ -45,7 +45,7 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 	target := fs.String("version", "", "Install this exact tag (e.g. v0.2.0) instead of the latest")
 	noRestart := fs.Bool("no-restart", false, "Do not restart the service after upgrading")
 	noBackup := fs.Bool("no-backup", false, "Skip the DB backup (use on agent nodes, which hold no DB)")
-	service := fs.String("service", "okboy", "systemd unit to restart after upgrade (use okboy-agent on an agent node)")
+	service := fs.String("service", "nft-okboy", "systemd unit to restart after upgrade (use nft-okboy-agent on an agent node)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -79,7 +79,7 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 		return nil
 	}
 	if os.Geteuid() != 0 {
-		return fmt.Errorf("upgrade must run as root (try: sudo okboy upgrade)")
+		return fmt.Errorf("upgrade must run as root (try: sudo nft-okboy upgrade)")
 	}
 
 	// Resolve symlinks so the staged binary lands in the same directory as the
@@ -113,7 +113,7 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 
 	// Stage in the target directory, then atomically swap, keeping a .bak.
 	dir := filepath.Dir(exe)
-	tmp := filepath.Join(dir, ".okboy.upgrade.tmp")
+	tmp := filepath.Join(dir, ".nft-okboy.upgrade.tmp")
 	if werr := os.WriteFile(tmp, data, 0o755); werr != nil {
 		return fmt.Errorf("write staged binary: %w", werr)
 	}
@@ -152,7 +152,7 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 		}
 	}
 
-	fmt.Printf("Upgraded okboy %s → %s.  Previous binary kept at %s\n",
+	fmt.Printf("Upgraded nft-okboy %s → %s.  Previous binary kept at %s\n",
 		displayVersion(version), want, bak)
 	return nil
 }
@@ -197,7 +197,7 @@ func latestReleaseTag(repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "okboy-upgrade")
+	req.Header.Set("User-Agent", "nft-okboy-upgrade")
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := httpClient().Do(req)
 	if err != nil {
@@ -297,14 +297,14 @@ func ghGet(url string) ([]byte, error) {
 
 // assetForHost maps the running platform to its published release asset name, or
 // "" when no prebuilt binary is published for it. The release ships one static
-// binary per linux arch named "okboy-linux-<arch>".
+// binary per linux arch named "nft-okboy-linux-<arch>".
 func assetForHost() string {
 	if runtime.GOOS != "linux" {
 		return ""
 	}
 	switch runtime.GOARCH {
 	case "amd64", "arm64", "386", "loong64", "ppc64le", "riscv64", "s390x":
-		return "okboy-linux-" + runtime.GOARCH
+		return "nft-okboy-linux-" + runtime.GOARCH
 	default:
 		// "arm" cannot be disambiguated into armv6/armv7 at runtime — deploy/
 		// install.sh resolves that from `uname -m`.

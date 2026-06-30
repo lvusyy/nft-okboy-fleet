@@ -1,4 +1,4 @@
-// Command okboy is the nft-okboy server + management CLI — a faithful Go port of
+// Command nft-okboy is the nft-okboy server + management CLI — a faithful Go port of
 // the Python server/app.py argparse dispatch. main stays intentionally thin: it
 // resolves the global -c/--config flag, peels off the subcommand, and hands the
 // remaining args to the matching handler in internal/cli. All real logic lives in
@@ -23,7 +23,7 @@ var version = "dev"
 // defaultConfigPath is the fallback config location when -c/--config is omitted
 // and no config.yaml sits next to the executable (mirrors the Python
 // script-relative default, but for a packaged install).
-const defaultConfigPath = "/etc/okboy/config.yaml"
+const defaultConfigPath = "/etc/nft-okboy/config.yaml"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -42,7 +42,7 @@ func run(argv []string) error {
 		usage()
 		return nil
 	case "-V", "--version", "version":
-		fmt.Printf("okboy %s\n", version)
+		fmt.Printf("nft-okboy %s\n", version)
 		return nil
 	case "serve":
 		return cli.CmdServe(cfgPath, version, rest)
@@ -97,7 +97,7 @@ func run(argv []string) error {
 // parseGlobal extracts a leading/embedded global -c/--config flag, then returns
 // the resolved config path, the subcommand, and the args that follow it.
 //
-// The flag is accepted either before the subcommand ("okboy -c x serve") or the
+// The flag is accepted either before the subcommand ("nft-okboy -c x serve") or the
 // scan stops at the first non-flag token, which becomes the subcommand; remaining
 // tokens are forwarded verbatim so each subcommand can run its own FlagSet
 // (sub-flags like --admin/--proto are parsed there, not here).
@@ -153,10 +153,10 @@ func dir(p string) string {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `okboy - nftables dynamic firewall allowlist manager
+	fmt.Fprint(os.Stderr, `nft-okboy - nftables dynamic firewall allowlist manager
 
 Usage:
-  okboy [-c <config>] <command> [args]
+  nft-okboy [-c <config>] <command> [args]
 
 Global flags:
   -c, --config <path>   Config file (default: config.yaml beside the binary, else `+defaultConfigPath+`)

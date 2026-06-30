@@ -4,7 +4,7 @@
 //   - Outbound-only long-poll to the hub (NAT/proxy friendly); never listens
 //   - Reconcile the local firewall to the hub's desired state via
 //     firewall.Backend (reuses the C1 backend abstraction)
-//   - Stateless: managed rules are self-describing via the "okboy:" comment
+//   - Stateless: managed rules are self-describing via the "nft-okboy:" comment
 //     prefix; no local DB
 //   - Fail-safe: on hub-unreachable keep last-known-good (never panic-close,
 //     never auto-open); enforce a local max-ports allowlist as a guard against

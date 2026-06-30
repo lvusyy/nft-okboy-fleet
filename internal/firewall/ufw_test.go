@@ -4,7 +4,7 @@ import "testing"
 
 // A realistic `ufw status numbered` sample (ufw 0.36, C locale): two non-managed
 // rules ([1] world-open SSH, [6] a foreign comment, [7] the v6 SSH shadow) plus
-// four okboy-managed rules across v4/v6 and tcp/udp.
+// four nft-okboy-managed rules across v4/v6 and tcp/udp.
 const ufwSample = `Status: active
 
      To                         Action      From

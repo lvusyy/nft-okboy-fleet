@@ -10,7 +10,7 @@ import (
 // registration. Go 1.22's mux panics when two patterns overlap with neither being
 // more specific — e.g. a "/api/" subtree catch-all conflicts with "GET /". Neither
 // `go build` nor `go vet` calls Routes(), so a registration panic ships silently
-// and only surfaces when `okboy serve` crash-loops on startup. This test invokes
+// and only surfaces when `nft-okboy serve` crash-loops on startup. This test invokes
 // the real registration path so `go test` catches the whole class of bug.
 func TestRoutesRegister(t *testing.T) {
 	// Route registration builds the mux and wraps it in the throttle gate; it does

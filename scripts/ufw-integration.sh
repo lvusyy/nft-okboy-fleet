@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Real-ufw integration harness. Runs the okboy ufw integration test binary inside
+# Real-ufw integration harness. Runs the nft-okboy ufw integration test binary inside
 # fresh mount + network namespaces with a PRIVATE, throwaway /etc/ufw and ufw
 # ENABLED — so it exercises real `ufw` without touching the host:
 #
@@ -13,10 +13,10 @@
 # box — cross-compile the test binary elsewhere and copy it over:
 #
 #   # on a Go host (any OS):
-#   GOOS=linux GOARCH=amd64 go test -tags integration -c -o okboy-ufwtest ./internal/firewall/
-#   scp okboy-ufwtest <testbox>:/tmp/
+#   GOOS=linux GOARCH=amd64 go test -tags integration -c -o nft-okboy-ufwtest ./internal/firewall/
+#   scp nft-okboy-ufwtest <testbox>:/tmp/
 #   # on the test box:
-#   sudo bash scripts/ufw-integration.sh /tmp/okboy-ufwtest
+#   sudo bash scripts/ufw-integration.sh /tmp/nft-okboy-ufwtest
 set -euo pipefail
 
 BIN="$(readlink -f "${1:?usage: ufw-integration.sh <test-binary>}")"

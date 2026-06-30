@@ -1,4 +1,4 @@
-# okboy
+# nft-okboy
 
 [![CI](https://github.com/lvusyy/nft-okboy-fleet/actions/workflows/ci.yml/badge.svg)](https://github.com/lvusyy/nft-okboy-fleet/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/lvusyy/nft-okboy-fleet?sort=semver)](https://github.com/lvusyy/nft-okboy-fleet/releases)
@@ -22,15 +22,15 @@ IP 就被自动注册进防火墙；规则整洁、可追溯、能自愈。**单
 敏感端口（SSH、管理后台、数据库、监控面板）应只对可信 IP 开放。但人的 IP 一直在变
 ——家宽、4G、出差、VPN——每次都手动改防火墙规则根本不现实。
 
-**okboy 把这件事自动化**：用户在网页（或一个小脚本）里认证一次，服务器就把**他当前
+**nft-okboy 把这件事自动化**：用户在网页（或一个小脚本）里认证一次，服务器就把**他当前
 的 IP** 精确放行到**他所在组授权的端口**。IP 变了？下一个 30 秒心跳无感切换规则——不
 留规则垃圾、全程审计、零长期暴露面。
 
 ## ✨ 能力一览
 
 ### 🔥 防火墙 —— nftables 原生
-- **按 (用户, 组, 端口) 的放行规则**，落在专用 `inet okboy` 表里——每个授权一条规则，
-  注释 `okboy:<用户>:<组>`，完全可追溯。
+- **按 (用户, 组, 端口) 的放行规则**，落在专用 `inet nft_okboy` 表里——每个授权一条规则，
+  注释 `nft-okboy:<用户>:<组>`，完全可追溯。
 - **IP 无缝切换**——新 IP 一注册，旧 IP 立刻移除。
 - **每次 knock 原子幂等 reconcile**——把防火墙调整到与数据库**完全一致**（补缺、删除
   旧 IP/失效组/残留规则），从竞态、崩溃、并发变更中自愈。
@@ -70,10 +70,10 @@ IP 就被自动注册进防火墙；规则整洁、可追溯、能自愈。**单
 Nginx（TLS 终止，传 X-Real-IP）
     │  HTTP 127.0.0.1:5000
     ▼
-okboy（Go：HTTP API + CLI + 鉴权 + 限流）
+nft-okboy（Go：HTTP API + CLI + 鉴权 + 限流）
     │  nft -j -f -   （JSON 事务，无 shell）
     ▼
-nftables（专用 inet okboy 表 —— 仅 accept，与 k8s/host 共存）
+nftables（专用 inet nft_okboy 表 —— 仅 accept，与 k8s/host 共存）
     │
     ▼
 SQLite（纯 Go modernc；用户 / 组 / 成员 / 审计）
@@ -95,7 +95,7 @@ SQLite（纯 Go modernc；用户 / 组 / 成员 / 审计）
 | `s390x`   | IBM Z        | 大型机 |
 | `loong64` | LoongArch    | 龙芯 / Loongson |
 
-> 因为 okboy 是纯 Go（无 cgo），交叉编译到以上任意架构都是零成本（`make release-bins`）。
+> 因为 nft-okboy 是纯 Go（无 cgo），交叉编译到以上任意架构都是零成本（`make release-bins`）。
 > **MIPS**（`mips`/`mipsle`，部分老路由器）**不支持**——纯 Go 的 SQLite 驱动（modernc）
 > 没有 MIPS 移植。nftables 仅限 Linux，故没有 macOS/Windows 的服务端构建（*客户端*仍跨平台）。
 
@@ -110,40 +110,40 @@ curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deplo
 > 国内网络慢可走镜像（脚本下载二进制时也会自动镜像兜底）：
 > `curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deploy/install.sh | sudo sh`
 
-脚本自动：按架构下载二进制（sha256 校验）→ 写入 `/etc/okboy/config.yaml`（默认值即生产可用）→ 安装并启用 systemd 服务 → **创建 admin 并在结尾高亮打印一次性密钥**。重复运行即刷新二进制（配置/数据库保留）。
+脚本自动：按架构下载二进制（sha256 校验）→ 写入 `/etc/nft-okboy/config.yaml`（默认值即生产可用）→ 安装并启用 systemd 服务 → **创建 admin 并在结尾高亮打印一次性密钥**。重复运行即刷新二进制（配置/数据库保留）。
 
 装完开第一个组并授权，然后浏览器打开 Web 管理台，输入用户名 + 密钥 → **Connect**：
 
 ```bash
-okboy group-add ssh 22       # 把 22 端口纳管为 "ssh" 组
-okboy user-join admin ssh    # 授权 admin 使用该组
+nft-okboy group-add ssh 22       # 把 22 端口纳管为 "ssh" 组
+nft-okboy user-join admin ssh    # 授权 admin 使用该组
 ```
 
 ### 升级
 
 ```bash
-sudo okboy upgrade           # 自更新到最新 release（备份 DB → 校验 → 重启 → 失败回滚）
-sudo okboy upgrade --check   # 只检查不安装
+sudo nft-okboy upgrade           # 自更新到最新 release（备份 DB → 校验 → 重启 → 失败回滚）
+sudo nft-okboy upgrade --check   # 只检查不安装
 ```
 
 ### 从源码 / 手动
 
 ```bash
-make static                                  # → dist/okboy-linux-amd64（CGO_ENABLED=0，静态）
-#   或下载：curl -fsSLO https://github.com/lvusyy/nft-okboy-fleet/releases/latest/download/okboy-linux-amd64
+make static                                  # → dist/nft-okboy-linux-amd64（CGO_ENABLED=0，静态）
+#   或下载：curl -fsSLO https://github.com/lvusyy/nft-okboy-fleet/releases/latest/download/nft-okboy-linux-amd64
 cp config.example.yaml config.yaml
-./okboy gen-secret alice                     # 生成用户密钥
-./okboy -c config.yaml user-add alice        # 建用户
-./okboy -c config.yaml group-add ssh 22      # 建组（绑端口 22）
-./okboy -c config.yaml user-join alice ssh   # 把 ssh 组授权给 alice
-sudo ./okboy -c config.yaml serve            # 启动（需 root 或 CAP_NET_ADMIN）
+./nft-okboy gen-secret alice                     # 生成用户密钥
+./nft-okboy -c config.yaml user-add alice        # 建用户
+./nft-okboy -c config.yaml group-add ssh 22      # 建组（绑端口 22）
+./nft-okboy -c config.yaml user-join alice ssh   # 把 ssh 组授权给 alice
+sudo ./nft-okboy -c config.yaml serve            # 启动（需 root 或 CAP_NET_ADMIN）
 ```
 
 然后浏览器打开 `https://你的服务器/` → 输入用户名 + 密钥 → **Connect**。
 
 ## 🌐 Fleet 模式：一个 hub 管多机
 
-机器多了，不想每台装一整套？同一个 okboy 二进制还能跑**中心化 fleet**：
+机器多了，不想每台装一整套？同一个 nft-okboy 二进制还能跑**中心化 fleet**：
 
 - 一个 **hub**（控制面，唯一公网入口）holds 全部用户 / 组 / 节点 / 期望状态；
 - 每台机器一个轻量 **agent**——**纯出站拉取、无数据库、不监听任何公网端口**；
@@ -152,20 +152,20 @@ sudo ./okboy -c config.yaml serve            # 启动（需 root 或 CAP_NET_ADM
 
 ```bash
 # ① hub 上：注册节点 + 配置目标 + 授权用户
-okboy node-add edge-1                      # 打印一次性 token（配给该节点的 agent）
-okboy group-add web 8080
-okboy group-target add web edge-1 18080    # web 组在 edge-1 上映射到 18080
-okboy user-join alice web
+nft-okboy node-add edge-1                      # 打印一次性 token（配给该节点的 agent）
+nft-okboy group-add web 8080
+nft-okboy group-target add web edge-1 18080    # web 组在 edge-1 上映射到 18080
+nft-okboy user-join alice web
 
-# ② 边缘节点上：填 /etc/okboy/agent.env(OKBOY_HUB/NODE/TOKEN) + agent.yaml，然后
-systemctl enable --now okboy-agent
+# ② 边缘节点上：填 /etc/nft-okboy/agent.env(NFT_OKBOY_HUB/NODE/TOKEN) + agent.yaml，然后
+systemctl enable --now nft-okboy-agent
 
 # ③ 客户端敲一次 hub —— 授权的所有节点自动放行（一次 knock 覆盖全队列）
 ```
 
 - **🛡 安全护栏**：`agent_allowed_ports: [18080]` —— 节点只开白名单端口，**hub 被攻破也开不了 SSH**。
-- **📊 观测**：`okboy node-list` 看各节点 online / version / backend / 规则数。
-- **⬆ 自升级**：启用 `okboy-agent-upgrade.timer` 即可让 agent 每日自更新。
+- **📊 观测**：`nft-okboy node-list` 看各节点 online / version / backend / 规则数。
+- **⬆ 自升级**：启用 `nft-okboy-agent-upgrade.timer` 即可让 agent 每日自更新。
 
 > 📖 完整步骤（standalone / fleet / Kubernetes / 从 ufw-okboy 迁移 / 验证）见
 > **[部署指引 → docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**。
@@ -218,9 +218,9 @@ trusted_proxies: ["127.0.0.1", "::1"]   # 信任谁的 X-Real-IP/XFF
 throttle_max_failures: 10               # 按 IP，0 关闭
 require_admin_totp: false               # 强制管理员 2FA
 totp_replay_protection: true
-nft_table: okboy                        # 专用 inet 表
+nft_table: nft-okboy                        # 专用 inet 表
 nft_priority: -150                      # 仅 accept，与 k8s 共存
-db_path: /var/lib/okboy/okboy.db
+db_path: /var/lib/nft-okboy/nft-okboy.db
 # users:                                # 可选首次种子
 #   admin: { secret: "<64 位十六进制>" }
 ```
@@ -240,17 +240,17 @@ make integration   # 隔离 netns 内真实 nftables（Linux+root）—— 对 h
 ## 部署
 
 ```bash
-install -Dm755 dist/okboy-linux-amd64 /opt/okboy/okboy
-install -Dm600 config.yaml /etc/okboy/config.yaml
-install -Dm644 deploy/okboy.service /etc/systemd/system/okboy.service
-systemctl enable --now okboy
-# nginx：deploy/nginx-okboy.conf —— 务必 proxy_set_header X-Real-IP $remote_addr
+install -Dm755 dist/nft-okboy-linux-amd64 /opt/nft-okboy/nft-okboy
+install -Dm600 config.yaml /etc/nft-okboy/config.yaml
+install -Dm644 deploy/nft-okboy.service /etc/systemd/system/nft-okboy.service
+systemctl enable --now nft-okboy
+# nginx：deploy/nginx-nft-okboy.conf —— 务必 proxy_set_header X-Real-IP $remote_addr
 ```
 
 ## 目录结构
 
 ```
-cmd/okboy/            main：子命令分发
+cmd/nft-okboy/            main：子命令分发
 internal/config/      YAML 配置加载
 internal/db/          SQLite 层（schema + 迁移 + CRUD + 原子 IP 写 + 备份）
 internal/auth/        HMAC 验签 + TOTP + 按 IP 限流

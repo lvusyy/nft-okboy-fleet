@@ -72,7 +72,7 @@ func Load(path string) (*Config, error) {
 		ListenHost:           "127.0.0.1",
 		ListenPort:           5000,
 		SignatureTTL:         300,
-		RulePrefix:           "okboy",
+		RulePrefix:           "nft-okboy",
 		TrustedProxies:       []string{"127.0.0.1", "::1"},
 		ThrottleMaxFailures:  10,
 		ThrottleWindow:       300,
@@ -80,11 +80,11 @@ func Load(path string) (*Config, error) {
 		TOTPReplayProtection: true,
 		AnomalyWindow:        3600,
 		AnomalyMaxChanges:    5,
-		DBPath:               "/var/lib/okboy/okboy.db",
-		BackupDir:            "/var/lib/okboy/backups",
+		DBPath:               "/var/lib/nft-okboy/nft-okboy.db",
+		BackupDir:            "/var/lib/nft-okboy/backups",
 		BackupKeep:           7,
 		FirewallBackend:      "nftables",
-		NftTable:             "okboy",
+		NftTable:             "nft_okboy",
 		NftChain:             "input",
 		NftPriority:          -150,
 	}
@@ -100,7 +100,7 @@ func Load(path string) (*Config, error) {
 		c.Proto = "tcp"
 	}
 	if c.RulePrefix == "" {
-		c.RulePrefix = "okboy"
+		c.RulePrefix = "nft-okboy"
 	}
 	if c.FirewallBackend == "" {
 		c.FirewallBackend = "nftables"

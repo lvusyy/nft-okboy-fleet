@@ -49,7 +49,7 @@ func (s *Server) nodeDesiredState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Record liveness + the agent's self-reported version/backend (fleet view).
-	_ = s.db.UpdateNodeReport(node.ID, r.Header.Get("X-Okboy-Version"), r.Header.Get("X-Okboy-Backend"))
+	_ = s.db.UpdateNodeReport(node.ID, r.Header.Get("X-Nft-Okboy-Version"), r.Header.Get("X-Nft-Okboy-Backend"))
 	desired, err := s.db.DesiredStateForNode(node.ID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")

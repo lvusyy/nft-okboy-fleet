@@ -15,7 +15,7 @@ import (
 	"nft-okboy-fleet/internal/config"
 )
 
-// CmdAgent runs okboy as an edge agent: it pulls this node's desired firewall
+// CmdAgent runs nft-okboy as an edge agent: it pulls this node's desired firewall
 // state from the hub and reconciles the local firewall to it on every interval,
 // until SIGINT/SIGTERM. It needs a config only for the firewall backend
 // (firewall_backend / rule_prefix / nft_* / agent_allowed_ports) — there is NO

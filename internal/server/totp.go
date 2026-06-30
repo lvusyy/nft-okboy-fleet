@@ -10,8 +10,8 @@ import (
 
 // issuer is the otpauth:// issuer label embedded in enrollment URIs (the app
 // name shown in the authenticator). app.py used the default "ufw-okboy"; this Go
-// port is branded "okboy" consistently (matching /health service + rule prefix).
-const issuer = "okboy"
+// port is branded "nft-okboy" consistently (matching /health service + rule prefix).
+const issuer = "nft-okboy"
 
 // stepUp is the TOTP step-up gate for sensitive admin ops, a faithful port of
 // app.py's _step_up_error(user). It returns true when it has short-circuited the

@@ -91,10 +91,10 @@ func fetch(ctx context.Context, client *http.Client, url string, opts Options) (
 	}
 	req.Header.Set("Authorization", "Bearer "+opts.Token)
 	if opts.Version != "" {
-		req.Header.Set("X-Okboy-Version", opts.Version)
+		req.Header.Set("X-Nft-Okboy-Version", opts.Version)
 	}
 	if opts.Backend != "" {
-		req.Header.Set("X-Okboy-Backend", opts.Backend)
+		req.Header.Set("X-Nft-Okboy-Backend", opts.Backend)
 	}
 	resp, err := client.Do(req)
 	if err != nil {

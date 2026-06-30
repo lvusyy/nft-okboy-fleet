@@ -6,8 +6,8 @@
 // — see scripts/ufw-integration.sh, which sets up a mount+net namespace and
 // enables ufw before invoking this binary, so the host firewall is never touched:
 //
-//	GOOS=linux GOARCH=amd64 go test -tags integration -c -o okboy-ufwtest ./internal/firewall/
-//	sudo bash scripts/ufw-integration.sh ./okboy-ufwtest
+//	GOOS=linux GOARCH=amd64 go test -tags integration -c -o nft-okboy-ufwtest ./internal/firewall/
+//	sudo bash scripts/ufw-integration.sh ./nft-okboy-ufwtest
 //
 // Cross-group note: UFW deduplicates rules by match params (ip/port/proto) and
 // IGNORES the comment, so two groups sharing the SAME (port, proto) for one user

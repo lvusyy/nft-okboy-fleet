@@ -8,21 +8,21 @@
 # The agent backend is selectable so the SAME hub is verified against both edge
 # firewalls (the heterogeneous-fleet claim):
 #   AGENT_BACKEND=ufw       (default) — verify via `ufw status`
-#   AGENT_BACKEND=nftables            — verify via `nft list table inet okboy`
+#   AGENT_BACKEND=nftables            — verify via `nft list table inet nft_okboy`
 #
 # Usage (Linux box with ufw + nft + unshare + passwordless sudo, no Go required):
-#   scp okboy scripts/e2e-fleet.sh <box>:/tmp/
+#   scp nft-okboy scripts/e2e-fleet.sh <box>:/tmp/
 #   sudo AGENT_BACKEND=ufw      bash /tmp/e2e-fleet.sh
 #   sudo AGENT_BACKEND=nftables bash /tmp/e2e-fleet.sh
 set -uo pipefail
 
-BIN="${BIN:-/tmp/okboy}"
+BIN="${BIN:-/tmp/nft-okboy}"
 AGENT_BACKEND="${AGENT_BACKEND:-ufw}"
 WORK=/tmp/fleet-e2e
 
 if [ "${IN_NS:-}" != "1" ]; then
 	command -v unshare >/dev/null || { echo "unshare not found"; exit 1; }
-	[ -x "$BIN" ] || { echo "okboy binary not executable: $BIN"; exit 1; }
+	[ -x "$BIN" ] || { echo "nft-okboy binary not executable: $BIN"; exit 1; }
 	rm -rf "$WORK"; mkdir -p "$WORK"
 	export IN_NS=1 BIN WORK AGENT_BACKEND
 	exec unshare --mount --net --fork bash "$0" "$@"
@@ -36,25 +36,25 @@ fail() { echo "  [FAIL] $*"; FAILS=$((FAILS + 1)); }
 dump_rules() {
 	case "$AGENT_BACKEND" in
 		ufw)      ufw status numbered ;;
-		nftables) nft list table inet okboy 2>/dev/null ;;
+		nftables) nft list table inet nft_okboy 2>/dev/null ;;
 	esac
 }
 has_ip()    { # has_ip <ip> : a managed 18080 rule for <ip> exists
 	case "$AGENT_BACKEND" in
 		ufw)      ufw status numbered | grep -qE "18080/tcp.* $1( |$)" ;;
-		nftables) nft list table inet okboy 2>/dev/null | grep -qE "saddr $1 .*dport 18080" ;;
+		nftables) nft list table inet nft_okboy 2>/dev/null | grep -qE "saddr $1 .*dport 18080" ;;
 	esac
 }
 any_18080() {
 	case "$AGENT_BACKEND" in
 		ufw)      ufw status numbered | grep -q '18080/tcp' ;;
-		nftables) nft list table inet okboy 2>/dev/null | grep -q 'dport 18080' ;;
+		nftables) nft list table inet nft_okboy 2>/dev/null | grep -q 'dport 18080' ;;
 	esac
 }
 port_present() { # port_present <port> : a managed rule for <port> exists
 	case "$AGENT_BACKEND" in
 		ufw)      ufw status numbered | grep -qE "\][[:space:]]+$1/tcp[[:space:]]" ;;
-		nftables) nft list table inet okboy 2>/dev/null | grep -qE "dport $1[[:space:]]" ;;
+		nftables) nft list table inet nft_okboy 2>/dev/null | grep -qE "dport $1[[:space:]]" ;;
 	esac
 }
 
@@ -67,7 +67,7 @@ ufw --force enable >/dev/null   # ufw stays enabled in-ns even for the nft run (
 
 cat > "$WORK/hub.yaml" <<EOF
 firewall_backend: none
-rule_prefix: okboy
+rule_prefix: nft-okboy
 listen_host: 127.0.0.1
 listen_port: 5000
 db_path: $WORK/hub.db
@@ -75,7 +75,7 @@ trusted_proxies: ["127.0.0.1", "::1"]
 EOF
 cat > "$WORK/agent.yaml" <<EOF
 firewall_backend: $AGENT_BACKEND
-rule_prefix: okboy
+rule_prefix: nft-okboy
 agent_allowed_ports: [18080]
 EOF
 

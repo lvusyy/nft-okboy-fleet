@@ -1,4 +1,4 @@
-# okboy
+# nft-okboy
 
 [![CI](https://github.com/lvusyy/nft-okboy-fleet/actions/workflows/ci.yml/badge.svg)](https://github.com/lvusyy/nft-okboy-fleet/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/lvusyy/nft-okboy-fleet?sort=semver)](https://github.com/lvusyy/nft-okboy-fleet/releases)
@@ -26,7 +26,7 @@ Sensitive ports (SSH, admin panels, databases, dashboards) should be reachable
 only from trusted IPs. But people's IPs change constantly — home broadband, 4G,
 travel, VPNs — and editing firewall rules by hand every time does not scale.
 
-**okboy automates it**: a user authenticates through a web page (or a tiny
+**nft-okboy automates it**: a user authenticates through a web page (or a tiny
 script) and the server opens *exactly their current IP* to *exactly the ports
 their group grants*. IP changed? The next 30-second heartbeat swaps the rule
 seamlessly — no rule sprawl, a full audit trail, zero standing exposure.
@@ -34,8 +34,8 @@ seamlessly — no rule sprawl, a full audit trail, zero standing exposure.
 ## ✨ Capabilities
 
 ### 🔥 Firewall — native nftables
-- **Per-(user, group, port) allow rules** in a dedicated `inet okboy` table — one
-  rule per grant, commented `okboy:<user>:<group>` for full traceability.
+- **Per-(user, group, port) allow rules** in a dedicated `inet nft_okboy` table — one
+  rule per grant, commented `nft-okboy:<user>:<group>` for full traceability.
 - **Seamless IP switching** — the old IP is removed the instant a new one registers.
 - **Atomic, idempotent reconcile** on every knock — the firewall is made to match
   the database *exactly* (add missing, drop stale / old-IP / disabled-group rules),
@@ -85,10 +85,10 @@ Client (browser / Python / shell)
 Nginx (TLS termination, passes X-Real-IP)
     │  HTTP 127.0.0.1:5000
     ▼
-okboy (Go: HTTP API + CLI + auth + throttle)
+nft-okboy (Go: HTTP API + CLI + auth + throttle)
     │  nft -j -f -   (JSON transaction, no shell)
     ▼
-nftables (dedicated `inet okboy` table — accept-only, coexists with k8s/host)
+nftables (dedicated `inet nft_okboy` table — accept-only, coexists with k8s/host)
     │
     ▼
 SQLite (pure-Go modernc; users / groups / membership / audit)
@@ -110,7 +110,7 @@ Prebuilt static `linux` binaries are attached to every [release](https://github.
 | `s390x`   | IBM Z        | mainframe |
 | `loong64` | LoongArch    | Loongson / 龙芯 |
 
-> Because okboy is pure Go (no cgo), cross-compiling to any of these is free
+> Because nft-okboy is pure Go (no cgo), cross-compiling to any of these is free
 > (`make release-bins`). **MIPS** (`mips`/`mipsle`, common on older routers) is
 > **not** available — the pure-Go SQLite driver (modernc) has no MIPS port.
 > nftables is Linux-only, so there are no server builds for macOS/Windows (the
@@ -125,36 +125,36 @@ curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deplo
 ```
 
 The script picks the right binary for your arch (sha256-verified) → writes
-`/etc/okboy/config.yaml` (production-sane defaults) → installs and enables the
+`/etc/nft-okboy/config.yaml` (production-sane defaults) → installs and enables the
 systemd service → **creates an `admin` account and prints its one-time secret,
 highlighted, at the end**. Re-run any time to refresh the binary (config and
-database are preserved). Pin a version with `OKBOY_VERSION=vX.Y.Z`.
+database are preserved). Pin a version with `NFT_OKBOY_VERSION=vX.Y.Z`.
 
 Open your first group, authorize the admin, then open the Web console and Connect:
 
 ```bash
-okboy group-add ssh 22       # manage port 22 as the "ssh" group
-okboy user-join admin ssh    # authorize admin for it
+nft-okboy group-add ssh 22       # manage port 22 as the "ssh" group
+nft-okboy user-join admin ssh    # authorize admin for it
 ```
 
 ### Upgrade
 
 ```bash
-sudo okboy upgrade           # self-update (backup DB → verify → restart → rollback on failure)
-sudo okboy upgrade --check   # check only, do not install
+sudo nft-okboy upgrade           # self-update (backup DB → verify → restart → rollback on failure)
+sudo nft-okboy upgrade --check   # check only, do not install
 ```
 
 ### From source / manual
 
 ```bash
-make static                                  # → dist/okboy-linux-amd64 (CGO_ENABLED=0, static)
-#   or: curl -fsSLO https://github.com/lvusyy/nft-okboy-fleet/releases/latest/download/okboy-linux-amd64
+make static                                  # → dist/nft-okboy-linux-amd64 (CGO_ENABLED=0, static)
+#   or: curl -fsSLO https://github.com/lvusyy/nft-okboy-fleet/releases/latest/download/nft-okboy-linux-amd64
 cp config.example.yaml config.yaml
-./okboy gen-secret alice                     # generate a user secret
-./okboy -c config.yaml user-add alice        # create the user
-./okboy -c config.yaml group-add ssh 22      # create a group bound to port 22
-./okboy -c config.yaml user-join alice ssh   # grant alice the ssh group
-sudo ./okboy -c config.yaml serve            # serve (needs root or CAP_NET_ADMIN)
+./nft-okboy gen-secret alice                     # generate a user secret
+./nft-okboy -c config.yaml user-add alice        # create the user
+./nft-okboy -c config.yaml group-add ssh 22      # create a group bound to port 22
+./nft-okboy -c config.yaml user-join alice ssh   # grant alice the ssh group
+sudo ./nft-okboy -c config.yaml serve            # serve (needs root or CAP_NET_ADMIN)
 ```
 
 Then open `https://your-server/` → enter username + secret → **Connect**.
@@ -207,9 +207,9 @@ trusted_proxies: ["127.0.0.1", "::1"]   # whose X-Real-IP/XFF to trust
 throttle_max_failures: 10               # per-IP, 0 disables
 require_admin_totp: false               # force admin 2FA
 totp_replay_protection: true
-nft_table: okboy                        # dedicated inet table
+nft_table: nft-okboy                        # dedicated inet table
 nft_priority: -150                      # accept-only, coexists with k8s
-db_path: /var/lib/okboy/okboy.db
+db_path: /var/lib/nft-okboy/nft-okboy.db
 # users:                                # optional first-run seed
 #   admin: { secret: "<64 hex chars>" }
 ```
@@ -231,17 +231,17 @@ reviewed with codex.
 ## Deploy
 
 ```bash
-install -Dm755 dist/okboy-linux-amd64 /opt/okboy/okboy
-install -Dm600 config.yaml /etc/okboy/config.yaml
-install -Dm644 deploy/okboy.service /etc/systemd/system/okboy.service
-systemctl enable --now okboy
-# nginx: deploy/nginx-okboy.conf — MUST set proxy_set_header X-Real-IP $remote_addr
+install -Dm755 dist/nft-okboy-linux-amd64 /opt/nft-okboy/nft-okboy
+install -Dm600 config.yaml /etc/nft-okboy/config.yaml
+install -Dm644 deploy/nft-okboy.service /etc/systemd/system/nft-okboy.service
+systemctl enable --now nft-okboy
+# nginx: deploy/nginx-nft-okboy.conf — MUST set proxy_set_header X-Real-IP $remote_addr
 ```
 
 ## Project layout
 
 ```
-cmd/okboy/            main: subcommand dispatch
+cmd/nft-okboy/            main: subcommand dispatch
 internal/config/      YAML config loading
 internal/db/          SQLite layer (schema + migrations + CRUD + atomic IP write + backup)
 internal/auth/        HMAC verify + TOTP + per-IP throttle
