@@ -1,15 +1,21 @@
 # nft-okboy — nftables dynamic firewall allowlist manager (server config)
-# Copy to config.yaml and edit. The server reads -c/--config, else
-# /etc/nft-okboy/config.yaml, else a config.yaml next to the binary.
+# Copy to config.yaml and edit. nft-okboy reads the file given with -c/--config,
+# else a config.yaml next to the executable if there is one, else
+# /etc/nft-okboy/config.yaml.
 
-# The server listens here (behind nginx). Bind localhost only.
+# The server listens here. With nginx on the same host, bind localhost only; a
+# hub reached from other hosts (e.g. through a Kubernetes Service) needs a
+# reachable address such as 0.0.0.0.
 listen_host: 127.0.0.1
 listen_port: 5000
 
-# Default L4 protocol for groups created without an explicit proto.
+# Not used (ignored). Each group sets its own protocol: --proto on group-add and
+# group-target add, or "proto" in the HTTP API; tcp by default.
 proto: tcp
 
-# Optional opt-in whitelist: new groups may only bind these ports. Omit = no limit.
+# Optional port whitelist, enforced by the HTTP API only: groups created through
+# the API (and so the web console) may only use these ports. The CLI (group-add,
+# group-target add) does not check it. Omit = no limit.
 # allowed_ports: [22, 80, 443, 8080]
 
 # ---- Security ----
@@ -18,22 +24,28 @@ rule_prefix: nft-okboy            # rule comment = <prefix>:<user>:<group> (nft 
 
 # X-Real-IP / X-Forwarded-For are trusted ONLY when the direct peer is in this
 # list (your reverse proxy). A direct client cannot then spoof its registered IP.
+# Exact IP addresses only; CIDR ranges are not supported.
 trusted_proxies: ["127.0.0.1", "::1"]
 
 # Per-IP abuse throttle: after N failed auths from one IP within the window,
 # further /api/* requests from that IP get HTTP 429. Keyed on IP, not username
-# (so an attacker can't lock out a legitimate user). 0 disables.
+# (so an attacker can't lock out a legitimate user). 0 disables. The same limit
+# also caps wrong TOTP codes per admin account, counted from any IP.
 throttle_max_failures: 10
 throttle_window: 300
 
-# Require admin TOTP for sensitive admin actions once enrolled. true also blocks
-# un-enrolled admins from those actions (forces enrollment).
+# Admin TOTP step-up. An admin who has enrolled TOTP must send a current code
+# with every admin write, whatever this is set to. true additionally blocks
+# admins who have NOT enrolled from those writes until they enroll (enrolling
+# itself stays allowed).
 require_admin_totp: false
 
 # Reject replay of an already-consumed TOTP step-up code (RFC 6238 §5.2).
 totp_replay_protection: true
 
 # ---- Anomaly detection (possible credential sharing) ----
+# A knock response carries a warning once a user's IP has changed at least
+# anomaly_max_changes times within anomaly_window seconds.
 anomaly_window: 3600
 anomaly_max_changes: 5
 
@@ -72,6 +84,7 @@ firewall_backend: nftables
 # firewalls and nat chains it finds at startup.
 nft_table: nft_okboy
 nft_chain: input
+# 0 is treated as unset and replaced by -150.
 nft_priority: -150
 # false removes the guard: the table then only adds accept rules, which restrict
 # nothing (ports stay open to everyone). Only for a transition.
@@ -88,9 +101,11 @@ backup_dir: /var/lib/nft-okboy/backups
 backup_keep: 7
 
 # ---- First-run user seed (optional) ----
-# On a FRESH db (no users yet) these users are created once, as non-admins; after
-# that this section is ignored. Secrets shorter than 32 characters are skipped.
-# Generate a secret with:
+# Imported only when the database file is created: the first command that opens
+# a new db_path (serve or any CLI command) creates these users once, as
+# NON-admins (grant admin with `nft-okboy admin-add <user>`). An existing
+# database is never seeded, even one without users. Secrets shorter than 32
+# characters are skipped. Generate a secret with:
 #   nft-okboy gen-secret alice
 # users:
 #   admin:

@@ -28,10 +28,16 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-armv7 ./cmd/nft-okboy
           CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=6 go build -trimpath -ldflags "$LD" -o dist/nft-okboy-linux-armv6 ./cmd/nft-okboy
           ( cd dist && sha256sum nft-okboy-linux-* > SHA256SUMS )
+      - name: release notes (this version's CHANGELOG.md section + the common notes)
+        run: |
+          awk -v h="## ${GITHUB_REF_NAME}" 'index($0, h " ") == 1 || $0 == h {on = 1; next} on && /^## / {exit} on' \
+            CHANGELOG.md > notes.md
+          [ -s notes.md ] || echo "::warning::CHANGELOG.md has no '## ${GITHUB_REF_NAME}' section."
+          cat .github/release-notes.md >> notes.md
       - name: publish release with binaries
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "${GITHUB_REF_NAME}" dist/nft-okboy-linux-* dist/SHA256SUMS \
             --title "nft-okboy Fleet ${GITHUB_REF_NAME}" \
-            --notes-file .github/release-notes.md --generate-notes
+            --notes-file notes.md --generate-notes

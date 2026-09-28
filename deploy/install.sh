@@ -8,7 +8,9 @@
 #
 # Env knobs:  NFT_OKBOY_VERSION=v0.2.0  (pin a version)   NO_COLOR=1  (plain output)
 #             NFT_OKBOY_SHA256=<hex>    (the binary's sha256 from the release page, when
-#                                        GitHub cannot be reached to look it up)
+#                                        GitHub cannot be reached to look it up; set
+#                                        NFT_OKBOY_VERSION too, and on a fresh install
+#                                        NFT_OKBOY_GH_MIRROR for the config and unit)
 #             NFT_OKBOY_GH_MIRROR=<url> (https:// only; a mirror you trust as much as GitHub
 #                                        itself — used for the version, checksums, config and
 #                                        unit when GitHub is unreachable)
@@ -160,6 +162,18 @@ install -d -m 700 "$DATA_DIR"
 install -m 755 "$TMP/nft-okboy" "$BIN"
 ok "binary → $BIN ($VER)"
 
+# ---- command on PATH ----
+# A link, not a copy: `nft-okboy upgrade` replaces the file the link points to.
+# (RHEL-family sudo does not search /usr/local/bin: use a root shell there.)
+LINK="/usr/local/bin/nft-okboy"
+if [ -L "$LINK" ] || [ ! -e "$LINK" ]; then
+  install -d -m 755 /usr/local/bin
+  ln -sfn "$BIN" "$LINK"
+  ok "command → $LINK"
+else
+  warn "$LINK exists and is not a link: left alone (run $BIN instead)."
+fi
+
 # ---- config (written once; an existing config is never overwritten) ----
 if [ ! -f "$CONF" ]; then
   install -d -m 700 "$CONF_DIR"
@@ -202,7 +216,7 @@ fi
 echo
 if [ "$UPGRADE" = 1 ]; then
   ok "Upgraded to $VER. Config and database were preserved."
-  echo "  Manage:  nft-okboy user-list   |   Upgrade later:  sudo nft-okboy upgrade"
+  echo "  Manage:  sudo nft-okboy user-list   |   Upgrade later:  sudo nft-okboy upgrade"
   exit 0
 fi
 
@@ -217,13 +231,13 @@ if [ -n "$SECRET" ]; then
   printf "    username:  ${B}admin${X}\n"
   printf "    secret:    ${B}%s${X}\n" "$SECRET"
 else
-  warn "Could not auto-create admin. Create one with: nft-okboy user-add --admin <name>"
+  warn "Could not auto-create admin. Create one with: sudo nft-okboy user-add --admin <name>"
 fi
 printf "${B}════════════════════════════════════════════════════════════${X}\n"
 echo
 echo "  Next: open a port group and authorize the admin, e.g."
-echo "    nft-okboy group-add ssh 22"
-echo "    nft-okboy user-join admin ssh"
+echo "    sudo nft-okboy group-add ssh 22"
+echo "    sudo nft-okboy user-join admin ssh"
 echo
 echo "  Then open the Web console, enter username + secret, and Connect."
 printf "  ${YL}With the nftables backend a group's port admits only IPs that knocked: once\n"

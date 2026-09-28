@@ -1,116 +1,67 @@
-# nft-okboy-fleet — Roadmap & Architecture
+# 路线图
 
-> 多机（fleet）场景下的 OkBoy：从「单机自治」演进为「中心控制面 + 轻量边缘 Agent」。
-> 本项目以 [nft-okboy](../nft-okboy) 的 Go 代码为种子（seed），原样复用其
-> `FirewallBackend` / `reconcile` / HMAC+TOTP 认证 / SQLite+migration 等原语。
+nft-okboy-fleet 把 [UFW-OkBoy](https://github.com/lvusyy/UFW-OkBoy) 的单机模型扩展为「一个中心控制面 + 多个轻量边缘 agent」。本文说明设计思路、已经实现的能力和计划中的工作；各版本的具体变更见 [CHANGELOG](CHANGELOG.md)，部署方法见[部署指引](docs/DEPLOYMENT.md)。
 
-## 为什么有这个项目
+## 为什么需要 fleet 模式
 
-`ufw-okboy` / `nft-okboy` 是**单机自治**工具：每台被保护机器跑一整套
-`nginx + API + 防火墙 + SQLite`（root）。N 台 = N 套部署 = N 个面向公网的
-root 管理服务 = N 个攻击面 + N 倍运维。
+UFW-OkBoy 和 standalone 模式的 nft-okboy 都是单机自治：每台受保护的机器各跑一套 nginx + API + 防火墙 + SQLite，并以 root 运行。N 台机器就是 N 套部署、N 个对外开放的 root 管理服务，攻击面和运维工作量都随机器数增长。
 
-把**「谁被允许」（控制面）**和**「开防火墙口子」（数据面）**拆开，三重压力一起解决。
-关键复用洞察：`reconcile_user_rules(user, ip, enabled_groups)` 已经把「期望状态」与
-「防火墙执行」解耦——中心化只是把期望状态的来源从本地 SQLite 换成 hub。
-
-## 锁定的决策
-
-| 项 | 取值 |
-|---|---|
-| 主干代码基 | **Go**（种子自 nft-okboy）；ufw-okboy(Python) 在 C1 功能等价后冻结为 legacy |
-| 队列规模 | **10–100 台，云 + 本地/NAT 混合** |
-| 形态 | **一个二进制 `nft-okboy`，三模式 `standalone\|hub\|agent`**，config 驱动 |
-| 后端 | **可插拔 `firewall.Backend`：nftables / ufw**（一个 hub 管异构队列） |
+fleet 模式把「谁被允许访问」（控制面）和「开关防火墙端口」（数据面）拆开：控制面集中在一个 hub，数据面由各机器上的 agent 执行。先按用户和组算出期望规则、再把防火墙调整到与之一致的对账逻辑，本来就不关心规则从哪里来；agent 只是把规则的来源从本地数据库换成了 hub。
 
 ## 架构
 
-```
-                     ┌───────────────────────────────────────┐
-  Client ──knock──►  │  HUB（控制面 · 唯一公网入口）           │
-  （只敲一次）        │  users/groups/membership/auth/TOTP     │
-                     │  node 注册 + 每节点「期望状态」计算      │
-                     │  Web 管理台 / 统一审计                  │
-                     └──▲──────────────▲──────────────▲───────┘
-                        │ 出站 HTTPS    │ 出站 HTTPS    │   ← agent 主动拨出
-                   ┌────┴────┐    ┌─────┴───┐    ┌──────┴──┐
-                   │  agent  │    │  agent  │    │  agent  │
-                   │ ufw后端 │    │ nft后端 │    │ ufw后端 │
-                   └─────────┘    └─────────┘    └─────────┘
-              （节点：无 nginx / 无证书 / 无 DB / 不监听任何公网端口）
-```
-
-- **控制面 = hub** = 现 server/db/auth 去掉本地防火墙调用 + node 注册 + 每节点期望状态 API。
-- **数据面 = agent** = 现 `firewall` reconcile，期望状态改从 hub 拉。**无状态、无 DB**。
-- **knock**：client 敲 hub 一次 → hub 算出该用户授权的 `(node, port)` → 写各节点期望状态 → agent 下次拉取开口。**一次 knock 覆盖全队列**。
-
-## 贯穿性原则
-
-1. **向后兼容神圣不可侵犯**：`standalone` 模式行为永不改变；hub/agent 是新增拓扑，不是替换。
-2. **Agent 无状态**：managed 规则由防火墙里 `nft-okboy:user:group` 前缀自描述，拉到期望集做幂等 diff。
-3. **故障安全**：hub 不可达时 agent 保留 last-known-good，**绝不 panic 关、绝不擅自开**。
-4. **纵深防御**：agent 本地 `max_ports` 白名单，即便 hub 被攻破也开不了 SSH。
-
-## 关键技术规格
-
-| 项 | 选型 | 理由 |
-|---|---|---|
-| 传输 | agent→hub **HTTPS 长轮询** + 30s 周期全量兜底 | 出站、穿 NAT/代理、秒级实时；比 WebSocket 简单 |
-| 节点身份 | 一次性 enrollment token（短 TTL）→ 换发 **per-node mTLS** | token 失窃窗口小，之后双向认证 |
-| 期望状态 | hub **签名**下发，agent 验签 | 防 hub-MITM / 篡改 |
-| 数据模型 | 新增 `nodes`；group target：本地端口 → `(node, port, proto)` | 其余表不动 |
-
-## 里程碑
-
-| # | 目标 | 收敛标准（可验证） | 依赖 |
-|---|---|---|---|
-| **C1** | 防火墙后端统一：新增 `firewall` 的 ufw 后端 | ufw 后端通过与 nft 等价的测试套件；一台 ufw-okboy(Python) 机器可用本二进制原地替换、状态无损 | — |
-| **C2** | Hub 控制面：node 注册 / 期望状态 API | curl 经 mTLS 拉某节点期望状态内容正确；管理台能注册 node + 绑定 `(node,port)` target | C1 |
-| **C3** | Edge Agent：出站 pull + reconcile + 故障安全 | 2 台机（1 ufw+1 nft），改 target 后 N 秒内正确开/关；断 hub 后规则不变 | C1, C2 |
-| **C4** | knock fan-out + 客户端迁移 | 一个用户 knock 一次，授权的多节点端口 N 秒内全放行；审计集中 | C2, C3 |
-| **C5** | 运维加固：fleet 仪表盘 / agent 自升级 / 签名 / max_ports | 自升级演练通过；篡改期望状态被拒；hub 故障恢复演练通过 | C3, C4 |
-| **C6** | （可选）Hub 高可用 | 双实例 hub + DB 外置；仅当规模/可用性要求升级时启动 | C2 |
-
-> **C2+C3 = 最小可用闭环。C1 可独立先交付（即合并 ufw-okboy 与 nft-okboy）。**
-
-## 目录演进
-
-```
-cmd/nft-okboy/              统一入口（已有；加 --mode 分发）
-internal/firewall/      backend.go(已有) + nft.go(已有) + mock.go(已有) + ufw.go(C1 新增)
-internal/auth/          HMAC+TOTP（已有）+ node mTLS（C2 新增）
-internal/db/            + nodes / group_targets（C2 新增）
-internal/server/        现有 API（已有）+ node 期望状态 API（C2 新增）
-internal/hub/           控制面（C2）
-internal/agent/         边缘 enforcer（C3）
-internal/static/        Web UI（已有）+ fleet 视图（C2/C5）
+```text
+                     ┌─────────────────────────────────────────┐
+  Client ──knock──►  │  HUB（控制面 · 唯一对外入口）             │
+  （只敲一次）        │  用户 / 组 / 成员 / 鉴权 / TOTP           │
+                     │  节点注册 + 每个节点的期望状态            │
+                     │  Web 管理台 / 统一审计                    │
+                     └──▲───────────────▲───────────────▲───────┘
+                        │ 出站 HTTPS     │ 出站 HTTPS     │ 出站 HTTPS   ← agent 主动拉取
+                   ┌────┴─────┐    ┌────┴─────┐    ┌────┴─────┐
+                   │  agent   │    │  agent   │    │  agent   │
+                   │ ufw 后端 │    │ nft 后端 │    │ ufw 后端 │
+                   └──────────┘    └──────────┘    └──────────┘
+             （节点：不监听端口，无数据库，只保存最近一次生效的防护）
 ```
 
-## 交付状态（2026-06-30）
+- **hub** 是 `nft-okboy serve`：保存用户、组、成员、节点和 target（组到节点端口的映射），为每个节点计算期望状态，也是 Web 管理台和审计的唯一入口。
+- **agent** 是 `nft-okboy agent`：定期拉取本节点的期望状态，对账本机防火墙。
+- **敲门**：客户端只敲 hub，hub 更新该用户的当前 IP；每个授权节点在下一次拉取时放行新 IP。一次敲门覆盖所有授权机器。
 
-C1–C4 **已完成并实体验证**，项目可交付：
+## 设计原则
 
-| 里程碑 | 状态 | 验证 |
-|---|---|---|
-| C1 ufw 后端 | ✅ | 单元 5/5 + 真实 ufw 0.36 集成测试（netns 沙箱） |
-| C2 Hub（nodes/group_targets/期望状态 API/CLI） | ✅ | `DesiredStateForNode` 单元测试；DB schema 兼容 Python |
-| C3 Edge Agent（出站拉取/整节点 reconcile/故障安全） | ✅ | `Reconcile` 单元测试（MockBackend） |
-| C4 fan-out（自动）+ `none` 纯 hub 后端 | ✅ | — |
-| **端到端** | ✅ | `scripts/e2e-fleet.sh`：hub→agent→真实 **ufw 与 nftables** 双后端，应用/IP变更/移除/故障安全全过，host 零影响 |
+1. **向后兼容**：standalone 模式的行为不因 fleet 功能而改变；hub 就是多了节点数据的 standalone 服务。
+2. **故障安全**：拉取失败时 agent 保持现有规则，既不清空，也不擅自放开；hub 明确拒绝节点 token（401）时，agent 撤掉全部放行规则、保留防护。
+3. **纵深防御**：agent 本地的 `agent_allowed_ports` 决定它能放行和拦截哪些端口，被攻破的 hub 改变不了这个范围；hub 下发的规则只能是单个 IP。
+4. **本地状态最少**：受管规则靠注释前缀自我描述；agent 没有数据库，只保存最近一次生效的防护，以便重启或规则集被清空后立即恢复。
 
-剩余（C5 强化，非交付阻塞）：fleet 仪表盘、agent 自升级、期望状态签名、节点 `max_ports` 白名单。
+## 已实现
 
-## 部署 fleet
+| 能力 | 说明 |
+|------|------|
+| standalone 模式 | `serve`：nftables（带防护）或 ufw 后端；Web 管理台、CLI、HTTP API；管理员 TOTP；审计；在线备份 |
+| 可插拔后端 | `nftables`、`ufw`，以及只做控制面的 `none`；一个 hub 可以同时管理 nftables 与 ufw 节点 |
+| hub 控制面 | 节点注册（`node-add`、`node-list`、`node-del`），组到节点端口的映射（`group-target`），按节点计算期望状态（`GET /api/v1/node/desired-state`） |
+| 节点认证 | 每个节点一个长期有效的 bearer token，hub 只保存其 SHA-256；删除节点即撤销 |
+| agent 拉取 | 出站 HTTPS，按固定间隔（默认 15 秒）全量拉取；可用 `--ca` 固定 hub 证书；不跟随重定向；非回环地址的明文 http 须显式允许 |
+| 本地护栏 | `agent_allowed_ports` / `--allow-ports`；丢弃不是单个 IP、端口或协议不合法的规则 |
+| 防护持久化 | 防护状态文件（`--state`）：重启或规则集被清空后，在向 hub 拉取之前先恢复防护 |
+| 自愈与过期 | `serve` 每 30 秒按数据库校正本机防火墙；超过 `cleanup_max_age_days` 天没敲门的用户被移出白名单，并经期望状态同步到各节点 |
+| fleet 观测 | `node-list` 和 `GET /api/admin/nodes`：在线状态、agent 版本与后端、期望规则数 |
+| agent 自升级 | `nft-okboy-agent-upgrade.timer` 每天运行 `upgrade --no-backup --service nft-okboy-agent`（armv6/armv7 除外） |
+| 从 Python 版迁移 | 直接使用 ufw-okboy 的数据库和 ufw 规则前缀；单向迁移，见[部署指引](docs/DEPLOYMENT.md#从-python-ufw-okboy-迁移) |
+| 测试 | 单元测试；真实 nftables 与 ufw 的集成测试；hub + agent 双后端的端到端测试和真实流量测试，都在 CI 中运行 |
 
-- **Hub**（控制面）：`nft-okboy -c hub.yaml serve`，`firewall_backend: none`（纯控制面）或 `nftables`（兼自保护）；前置 nginx TLS（复用 `deploy/`）。
-- **Agent**（每边缘节点）：`deploy/nft-okboy-agent.service` + `/etc/nft-okboy/agent.env`（`NFT_OKBOY_HUB`/`NFT_OKBOY_NODE`/`NFT_OKBOY_TOKEN`）+ `agent.yaml`（`firewall_backend: ufw|nftables`）。节点**只出站、无 DB、不监听公网**。
+## 计划中
 
-```bash
-# Hub 端：注册节点 + 配置目标 + 授权用户
-nft-okboy -c hub.yaml node-add edge-1            # 打印一次性 token
-nft-okboy -c hub.yaml group-add web 8080
-nft-okboy -c hub.yaml group-target add web edge-1 18080
-nft-okboy -c hub.yaml user-join alice web
-# Edge 端：token 写入 /etc/nft-okboy/agent.env，起 agent
-systemctl enable --now nft-okboy-agent
-```
+以下工作尚未实现，排列顺序不代表优先级：
+
+- **期望状态签名**：hub 签名、agent 验签，使 agent 不只依靠 TLS 确认 hub。
+- **节点双向 TLS（mTLS）**：用短期有效的一次性入网凭据换发节点证书，替代长期有效的 bearer token。
+- **在 Web 管理台和 HTTP API 中管理节点与 target**，并在 Web 管理台显示 fleet 视图。目前只能用 CLI 管理，API 只有只读的节点列表。
+- **更快的下发**：用长轮询等方式替代固定间隔的全量拉取。
+- **`restore` 命令**：从 `backup` 生成的快照恢复数据库。目前需要停服务后手动替换数据库文件。
+- **armv6/armv7 自升级**：`upgrade` 目前无法区分这两种 32 位 ARM，只能重新运行安装脚本或手动替换二进制。
+- **ufw 后端避让主机规则**：主机上已有来源、端口、协议完全相同的规则时不添加受管规则（UFW-OkBoy v2.4.0 已这样处理），避免 ufw 把手工规则改写为受管规则。
+- **hub 高可用（可选）**：多实例 hub 加外置数据库，只在规模或可用性要求需要时考虑。
