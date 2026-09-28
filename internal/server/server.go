@@ -13,6 +13,7 @@ package server
 import (
 	"net/http"
 	"sync"
+	"time"
 
 	"nft-okboy-fleet/internal/config"
 	"nft-okboy-fleet/internal/db"
@@ -29,6 +30,12 @@ type Server struct {
 	version string
 
 	totpMu sync.Mutex // makes each TOTP check atomic with its cap (totpAttempt)
+
+	// fwMu serializes whole firewall+state sequences — a knock's reconcile and
+	// IP write, a group toggle's re-sync, and Maintain's full pass — so Maintain
+	// never reconciles against an IP that a knock is halfway through replacing.
+	fwMu        sync.Mutex
+	lastCleanup time.Time // last stale-user cleanup (Maintain runs it hourly)
 }
 
 // NewServer constructs a Server from its dependencies. Version defaults to "dev"

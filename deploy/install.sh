@@ -226,4 +226,7 @@ echo "    nft-okboy group-add ssh 22"
 echo "    nft-okboy user-join admin ssh"
 echo
 echo "  Then open the Web console, enter username + secret, and Connect."
+printf "  ${YL}With the nftables backend a group's port admits only IPs that knocked: once\n"
+printf "  'ssh' exists, NEW SSH connections from elsewhere are dropped (this session stays).\n"
+printf "  Keep it open until you have connected from the Web console or knock.sh.${X}\n"
 echo "  Upgrade any time:  sudo nft-okboy upgrade"

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -28,6 +29,9 @@ type Options struct {
 	// ONLY these ports and refuses any hub-supplied rule on another port — so a
 	// compromised hub still cannot tell this node to open, say, SSH. Empty = all.
 	AllowedPorts []int
+	// Guard (nft_guard) makes an nftables backend close the node's managed ports
+	// to everyone its allow rules do not admit; false removes that guard.
+	Guard bool
 }
 
 // rule is one desired allow rule as served by the hub's node desired-state API.
@@ -43,12 +47,28 @@ type desiredResp struct {
 	OK    bool   `json:"ok"`
 	Node  string `json:"node"`
 	Rules []rule `json:"rules"`
+	// Ports are the node's managed ports (its group targets); nil when the hub
+	// is older than this field.
+	Ports *[]struct {
+		Port  int    `json:"port"`
+		Proto string `json:"proto"`
+	} `json:"ports"`
+}
+
+// errRevoked: the hub rejected the node token — the node was deleted or its
+// token replaced. Unlike a network or server error, that is an answer.
+var errRevoked = errors.New("the hub rejected this node's token (node deleted or token replaced)")
+
+// state is what the loop remembers between cycles (to log changes once).
+type state struct {
+	revoked, warnedNoPorts bool
 }
 
 // Run is the agent loop: pull the node's desired state from the hub, reconcile
 // the local firewall to it, sleep, repeat — until ctx is cancelled. A pull
 // failure is FAIL-SAFE: the current rules are left untouched (never flush the
-// allowlist because the hub blipped), and the next tick retries.
+// allowlist because the hub blipped), and the next tick retries. A rejected
+// token is not a blip, though: see step.
 func Run(ctx context.Context, be firewall.FirewallBackend, opts Options) error {
 	if opts.Interval <= 0 {
 		opts.Interval = 15 * time.Second
@@ -63,19 +83,9 @@ func Run(ctx context.Context, be firewall.FirewallBackend, opts Options) error {
 	url := strings.TrimRight(opts.HubURL, "/") + "/api/v1/node/desired-state"
 	log.Printf("agent: node=%q hub=%s interval=%s", opts.NodeName, url, opts.Interval)
 
+	st := &state{}
 	for {
-		if desired, err := fetch(ctx, client, url, opts); err != nil {
-			log.Printf("agent: pull failed, keeping current rules: %v", err)
-		} else {
-			desired = filterAllowed(sanitize(desired), opts.AllowedPorts)
-			added, removed, rerr := Reconcile(be, desired)
-			switch {
-			case rerr != nil:
-				log.Printf("agent: reconcile error (partial): %v", rerr)
-			case added > 0 || removed > 0:
-				log.Printf("agent: reconciled (+%d/-%d rules, %d desired)", added, removed, len(desired))
-			}
-		}
+		step(ctx, be, client, url, opts, st)
 		select {
 		case <-ctx.Done():
 			log.Printf("agent: stopping")
@@ -83,6 +93,81 @@ func Run(ctx context.Context, be firewall.FirewallBackend, opts Options) error {
 		case <-time.After(opts.Interval):
 		}
 	}
+}
+
+// step is one agent cycle: re-ensure the firewall base, pull, reconcile, guard.
+func step(ctx context.Context, be firewall.FirewallBackend, client *http.Client, url string, opts Options, st *state) {
+	// Every cycle, not just at start: `systemctl restart nftables` flushes the
+	// whole ruleset, nft-okboy's table included, and nothing else recreates it.
+	if err := be.EnsureBase(); err != nil {
+		log.Printf("agent: firewall base: %v", err)
+		return
+	}
+	dr, err := fetch(ctx, client, url, opts)
+	if errors.Is(err, errRevoked) {
+		// Fail closed: a node the hub no longer knows must not keep admitting
+		// anyone. The guard stays, so its ports end up closed.
+		_, removed, rerr := Reconcile(be, nil)
+		if !st.revoked || removed > 0 || rerr != nil {
+			log.Printf("agent: %v — removed %d managed rule(s)%s", err, removed, errSuffix(rerr))
+		}
+		st.revoked = true
+		return
+	}
+	if err != nil {
+		log.Printf("agent: pull failed, keeping current rules: %v", err)
+		return
+	}
+	st.revoked = false
+	desired := filterAllowed(sanitize(dr.Rules), opts.AllowedPorts)
+	added, removed, rerr := Reconcile(be, desired)
+	switch {
+	case rerr != nil:
+		log.Printf("agent: reconcile error (partial): %v", rerr)
+	case added > 0 || removed > 0:
+		log.Printf("agent: reconciled (+%d/-%d rules, %d desired)", added, removed, len(desired))
+	}
+	syncGuard(be, dr, opts, st)
+}
+
+// syncGuard (nftables backend) closes the node's managed ports — the hub's
+// "ports", narrowed to AllowedPorts when set, exactly like the allow rules — to
+// everyone the allow rules do not admit. A hub too old to send "ports" leaves
+// the guard as it is.
+func syncGuard(be firewall.FirewallBackend, dr *desiredResp, opts Options, st *state) {
+	g, ok := be.(firewall.Guard)
+	if !ok {
+		return
+	}
+	var ports []firewall.PortProto
+	if opts.Guard {
+		if dr.Ports == nil {
+			if !st.warnedNoPorts {
+				st.warnedNoPorts = true
+				log.Printf("agent: the hub does not report this node's ports (hub older than this agent): the nftables guard is left as is — upgrade the hub")
+			}
+			return
+		}
+		allowed := make(map[int]bool, len(opts.AllowedPorts))
+		for _, p := range opts.AllowedPorts {
+			allowed[p] = true
+		}
+		for _, p := range *dr.Ports {
+			if len(allowed) == 0 || allowed[p.Port] {
+				ports = append(ports, firewall.PortProto{Port: p.Port, Proto: p.Proto})
+			}
+		}
+	}
+	if err := g.SyncGuard(ports); err != nil {
+		log.Printf("agent: guard: %v", err)
+	}
+}
+
+func errSuffix(err error) string {
+	if err == nil {
+		return ""
+	}
+	return " (errors: " + err.Error() + ")"
 }
 
 // newClient builds the hub client: TLS verified against the system roots, or
@@ -105,8 +190,9 @@ func newClient(opts Options) *http.Client {
 	}
 }
 
-// fetch GETs the node desired-state with the bearer token and decodes the rules.
-func fetch(ctx context.Context, client *http.Client, url string, opts Options) ([]rule, error) {
+// fetch GETs the node desired-state with the bearer token and decodes it. A 401
+// is errRevoked.
+func fetch(ctx context.Context, client *http.Client, url string, opts Options) (*desiredResp, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -123,6 +209,9 @@ func fetch(ctx context.Context, client *http.Client, url string, opts Options) (
 		return nil, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, errRevoked
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("hub returned HTTP %d", resp.StatusCode)
 	}
@@ -133,53 +222,19 @@ func fetch(ctx context.Context, client *http.Client, url string, opts Options) (
 	if !dr.OK {
 		return nil, fmt.Errorf("hub responded ok=false")
 	}
-	return dr.Rules, nil
+	return &dr, nil
 }
 
-// Reconcile makes the backend's managed rule set EXACTLY match desired: add every
-// desired rule that is missing, delete every managed rule no longer desired, keyed
-// on (ip, port, proto, user, group). Idempotent — a second call with the same
-// desired set issues no mutations. A per-rule backend error is collected (not
-// fatal) so one bad rule cannot block the rest, mirroring Manager.Reconcile.
+// Reconcile makes the backend's managed rule set EXACTLY match desired (see
+// firewall.ReconcileAll, which the hub uses for its own firewall too): add every
+// missing desired rule, delete every managed rule no longer desired or
+// duplicated. Idempotent; per-rule backend errors are collected, not fatal.
 func Reconcile(be firewall.FirewallBackend, desired []rule) (added, removed int, err error) {
-	managed, lerr := be.ListManaged()
-	if lerr != nil {
-		return 0, 0, lerr
-	}
-	type key struct {
-		ip, proto, user, group string
-		port                   int
-	}
-	want := make(map[key]bool, len(desired))
+	rules := make([]firewall.Rule, 0, len(desired))
 	for _, d := range desired {
-		want[key{d.IP, d.Proto, d.User, d.Group, d.Port}] = true
+		rules = append(rules, firewall.Rule{IP: d.IP, Port: d.Port, Proto: d.Proto, User: d.User, Group: d.Group})
 	}
-	have := make(map[key]firewall.Rule, len(managed))
-	for _, m := range managed {
-		have[key{m.IP, m.Proto, m.User, m.Group, m.Port}] = m
-	}
-	for _, d := range desired {
-		k := key{d.IP, d.Proto, d.User, d.Group, d.Port}
-		if _, ok := have[k]; ok {
-			continue
-		}
-		if e := be.AddRule(d.IP, d.Port, d.User, d.Proto, d.Group); e != nil {
-			err = e
-			continue
-		}
-		added++
-	}
-	for k, m := range have {
-		if want[k] {
-			continue
-		}
-		if e := be.DeleteByHandle(m.Handle); e != nil {
-			err = e
-			continue
-		}
-		removed++
-	}
-	return added, removed, err
+	return firewall.ReconcileAll(be, rules)
 }
 
 // sanitize drops every hub rule that is not one IP address on a valid port and

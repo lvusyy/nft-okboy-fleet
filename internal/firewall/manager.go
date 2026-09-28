@@ -242,6 +242,26 @@ func (m *Manager) ListManaged() ([]Rule, error) {
 	return m.be.ListManaged()
 }
 
+// EnsureBase (re)creates what the backend needs — e.g. the nft table and chain
+// after `systemctl restart nftables` flushed the whole ruleset.
+func (m *Manager) EnsureBase() error {
+	return m.be.EnsureBase()
+}
+
+// ReconcileAll aligns every managed rule with desired (see ReconcileAll).
+func (m *Manager) ReconcileAll(desired []Rule) (added, removed int, err error) {
+	return ReconcileAll(m.be, desired)
+}
+
+// SyncGuard applies ports as the backend's guard when it has one (nftables);
+// backends without a Guard need none and this is a no-op.
+func (m *Manager) SyncGuard(ports []PortProto) error {
+	if g, ok := m.be.(Guard); ok {
+		return g.SyncGuard(ports)
+	}
+	return nil
+}
+
 // groupFromComment extracts the group from a comment "<prefix>:<user>:<group>".
 // It returns "" when the comment lacks the "<prefix>:<user>:" prefix or carries
 // no group suffix (the legacy "<prefix>:<user>" form), matching the Python

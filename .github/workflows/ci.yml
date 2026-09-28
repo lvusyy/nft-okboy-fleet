@@ -89,3 +89,5 @@ jobs:
         run: sudo BIN=/tmp/nft-okboy AGENT_BACKEND=ufw bash scripts/e2e-fleet.sh
       - name: e2e (agent backend = nftables)
         run: sudo BIN=/tmp/nft-okboy AGENT_BACKEND=nftables bash scripts/e2e-fleet.sh
+      - name: e2e (nftables, real traffic between two network namespaces)
+        run: sudo BIN=/tmp/nft-okboy bash scripts/e2e-nft-traffic.sh

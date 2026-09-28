@@ -75,6 +75,7 @@ func CmdAgent(cfgPath, version string, args []string) error {
 	if err != nil {
 		return fmt.Errorf("firewall backend init failed: %w", err)
 	}
+	warnFirewall(cfg, be)
 
 	// The --allow-ports flag overrides agent_allowed_ports from the config.
 	allowed := cfg.AgentAllowedPorts
@@ -103,6 +104,7 @@ func CmdAgent(cfgPath, version string, args []string) error {
 		Insecure:     *insecure,
 		RootCAs:      roots,
 		AllowedPorts: allowed,
+		Guard:        cfg.NftGuard,
 		Version:      version,
 		Backend:      cfg.FirewallBackend,
 	})

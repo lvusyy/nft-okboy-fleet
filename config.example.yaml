@@ -54,13 +54,27 @@ firewall_backend: nftables
 # agent_allowed_ports: [18080, 443]
 
 # ---- nftables backend (used when firewall_backend: nftables) ----
-# A dedicated `inet <nft_table>` table with an accept-policy input chain at the
-# given hook priority. It only ever ADDS accept rules, so it coexists with the
-# host / k8s (Calico/Cilium/kube-proxy) firewall in their own tables and never
-# drops traffic of its own accord.
+# A dedicated `inet <nft_table>` table with one input chain at the given hook
+# priority: an accept rule per allowlisted IP, then a guard that drops new
+# connections (for UDP: every datagram) to each managed port from everyone else.
+# Managed ports = the groups' ports (server) or the node's group targets (agent,
+# narrowed to agent_allowed_ports). Other ports are never touched, so the table
+# coexists with the host / k8s firewall in their own tables. But an accept here is
+# not final: if another firewall on the host (ufw, firewalld, nftables.conf) drops a
+# managed port, allowlisted clients stay blocked — open the port there (the guard
+# then does the restricting), or on a ufw host use firewall_backend: ufw. The
+# server/agent logs the other firewalls it finds at startup.
 nft_table: nft_okboy
 nft_chain: input
 nft_priority: -150
+# false removes the guard: the table then only adds accept rules, which restrict
+# nothing (ports stay open to everyone). Only for a transition.
+nft_guard: true
+
+# ---- Expiry ----
+# A user who has not knocked for this many days loses their allowlist entry, here
+# and on every node (checked hourly; they are back on their next knock). 0 = never.
+cleanup_max_age_days: 7
 
 # ---- Storage ----
 db_path: /var/lib/nft-okboy/nft-okboy.db

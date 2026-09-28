@@ -34,15 +34,22 @@ func portMap(groups []db.Group) map[string]firewall.PortProto {
 	return m
 }
 
-// syncEnabled re-applies ALL of user's enabled groups at ip. Used after a group
-// is (re-)enabled: reconciling only the toggled group would remove the rules of
-// the user's other groups until their next knock.
-func (s *Server) syncEnabled(userID int64, username, ip string) {
+// syncEnabled re-applies ALL of user's enabled groups at their current IP. Used
+// after a group is (re-)enabled: reconciling only the toggled group would remove
+// the rules of the user's other groups until their next knock. It re-reads the IP
+// under fwMu, so a knock that moved the user meanwhile is not undone.
+func (s *Server) syncEnabled(userID int64, username string) {
+	s.fwMu.Lock()
+	defer s.fwMu.Unlock()
+	u, err := s.db.GetUser(userID)
+	if err != nil || u == nil || u.CurrentIP == nil || *u.CurrentIP == "" {
+		return
+	}
 	groups, err := s.db.GetUserGroups(userID, true)
 	if err != nil {
 		return
 	}
-	_, _, _ = s.fw.Reconcile(username, ip, portMap(groups))
+	_, _, _ = s.fw.Reconcile(username, *u.CurrentIP, portMap(groups))
 }
 
 // serveIndex serves the embedded single-file web client for "/" and "/static/...".
@@ -88,6 +95,11 @@ func (s *Server) knock(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "User not found")
 		return
 	}
+
+	// From here on the firewall and the recorded IP change together; Maintain
+	// must not reconcile in between (it would restore the old IP's rules).
+	s.fwMu.Lock()
+	defer s.fwMu.Unlock()
 
 	enabledGroups, derr := s.db.GetUserGroups(user.ID, true)
 	if derr != nil {
@@ -333,7 +345,7 @@ func (s *Server) selfToggleMembership(w http.ResponseWriter, r *http.Request) {
 			_ = s.fw.RemoveRule(ip, group.Port, requester.Username, group.Proto, group.Name)
 		} else {
 			// Idempotent add via reconcile: re-enabling an existing rule is a no-op.
-			s.syncEnabled(requester.ID, requester.Username, ip)
+			s.syncEnabled(requester.ID, requester.Username)
 		}
 	}
 
@@ -441,7 +453,7 @@ func (s *Server) toggleMembership(w http.ResponseWriter, r *http.Request) {
 		if !enabled {
 			_ = s.fw.RemoveRule(ip, group.Port, target.Username, group.Proto, group.Name)
 		} else {
-			s.syncEnabled(target.ID, target.Username, ip)
+			s.syncEnabled(target.ID, target.Username)
 		}
 	}
 

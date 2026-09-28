@@ -508,6 +508,7 @@ func (s *Server) adminCreateGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.db.LogAudit(user.Username, "group_add", strPtr(name),
 		strPtr("port="+strconv.Itoa(portInt)+" proto="+proto))
+	s.syncGuardNow() // the new port is closed to non-members right away
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"ok": true, "id": id, "name": name, "port": portInt, "proto": proto,
 	})
@@ -554,6 +555,7 @@ func (s *Server) adminDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.db.LogAudit(user.Username, "group_del", strPtr(group.Name), nil)
+	s.syncGuardNow() // the port is no longer managed by nft-okboy
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": groupID})
 }
 

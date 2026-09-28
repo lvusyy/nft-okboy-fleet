@@ -51,6 +51,9 @@ type UfwBackend struct {
 	cfg     UfwConfig
 	ufwPath string
 	mu      sync.Mutex // in-process half of lock()
+	// warnedInactive: the "ufw is inactive" warning was logged (EnsureBase now
+	// runs on every agent cycle and server maintenance pass; say it once).
+	warnedInactive bool
 }
 
 // lock serializes ufw access: in this process via mu, and across nft-okboy
@@ -121,7 +124,12 @@ func (u *UfwBackend) EnsureBase() error {
 		return err
 	}
 	if !strings.Contains(out, "Status: active") {
-		log.Printf("ufw: firewall is INACTIVE — nft-okboy rules will not enforce until `ufw enable` (allow SSH first!)")
+		if !u.warnedInactive {
+			u.warnedInactive = true
+			log.Printf("ufw: firewall is INACTIVE — nft-okboy rules will not enforce until `ufw enable` (allow SSH first!)")
+		}
+	} else {
+		u.warnedInactive = false
 	}
 	return nil
 }

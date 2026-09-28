@@ -48,13 +48,13 @@ has_ip()    { # has_ip <ip> : a managed 18080 rule for <ip> exists
 any_18080() {
 	case "$AGENT_BACKEND" in
 		ufw)      ufw status numbered | grep -q '18080/tcp' ;;
-		nftables) nft list table inet nft_okboy 2>/dev/null | grep -q 'dport 18080' ;;
+		nftables) nft list table inet nft_okboy 2>/dev/null | grep -qE 'saddr .*dport 18080' ;; # allow rules, not the guard
 	esac
 }
 port_present() { # port_present <port> : a managed rule for <port> exists
 	case "$AGENT_BACKEND" in
 		ufw)      ufw status numbered | grep -qE "\][[:space:]]+$1/tcp[[:space:]]" ;;
-		nftables) nft list table inet nft_okboy 2>/dev/null | grep -qE "dport $1[[:space:]]" ;;
+		nftables) nft list table inet nft_okboy 2>/dev/null | grep -qE "saddr .*dport $1[[:space:]]" ;;
 	esac
 }
 

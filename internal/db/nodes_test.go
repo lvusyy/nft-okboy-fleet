@@ -122,3 +122,37 @@ func TestDesiredStateForNode(t *testing.T) {
 		t.Fatalf("after disable, node-B want 0 rules, got %+v", b2)
 	}
 }
+
+// TestNodeTargetPortsAndLocalState: a node's managed ports are its targets even
+// with nobody allowed in; the local desired state covers every user with an IP
+// and an enabled membership, on the group's own port.
+func TestNodeTargetPortsAndLocalState(t *testing.T) {
+	d := openTestDB(t)
+	nid, _ := d.CreateNode("edge-1", HashToken("t"))
+	web, _ := d.CreateGroup("web", 8080, "tcp")
+	dns, _ := d.CreateGroup("dns", 53, "udp")
+	_ = d.AddGroupTarget(web, nid, 18080, "tcp")
+	_ = d.AddGroupTarget(dns, nid, 5353, "udp")
+	ports, err := d.NodeTargetPorts(nid)
+	if err != nil || len(ports) != 2 || ports[0].Port != 5353 || ports[1].Port != 18080 {
+		t.Fatalf("NodeTargetPorts = %+v (err %v)", ports, err)
+	}
+
+	alice, _ := d.CreateUser("alice", "s", false)
+	bob, _ := d.CreateUser("bob", "s", false)
+	_, _ = d.CreateUser("carol", "s", false) // no IP: no rule
+	_ = d.AddMembership(alice, web, true)
+	_ = d.AddMembership(alice, dns, false) // disabled: no rule
+	_ = d.AddMembership(bob, dns, true)
+	_, _ = d.RecordIPChange(alice, "alice", "203.0.113.10")
+	_, _ = d.RecordIPChange(bob, "bob", "203.0.113.11")
+	local, err := d.DesiredStateLocal()
+	if err != nil || len(local) != 2 {
+		t.Fatalf("DesiredStateLocal = %+v (err %v)", local, err)
+	}
+	for _, r := range local {
+		if !(r.User == "alice" && r.Port == 8080 && r.IP == "203.0.113.10") && !(r.User == "bob" && r.Port == 53 && r.Proto == "udp") {
+			t.Fatalf("unexpected local rule %+v", r)
+		}
+	}
+}

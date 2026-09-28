@@ -132,3 +132,71 @@ func TestFilterAllowed(t *testing.T) {
 		t.Fatalf("allowlist [443] must drop both 18080 and 22")
 	}
 }
+
+// hubStub answers the desired-state call with status and body.
+func hubStub(t *testing.T, status int, body string) (string, *http.Client) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL, srv.Client()
+}
+
+// TestStepGuardFollowsHubPorts: the guard covers the hub's ports narrowed to
+// agent_allowed_ports; nft_guard off removes it; a hub without "ports" (older
+// than the agent) leaves it as it is.
+func TestStepGuardFollowsHubPorts(t *testing.T) {
+	ctx := context.Background()
+	be := firewall.NewMockBackend("nft-okboy")
+	body := `{"ok":true,"rules":[{"ip":"203.0.113.10","port":18080,"proto":"tcp","user":"alice","group":"web"}],
+		"ports":[{"port":18080,"proto":"tcp"},{"port":22,"proto":"tcp"}]}`
+	url, client := hubStub(t, 200, body)
+	opts := Options{Guard: true, AllowedPorts: []int{18080}}
+
+	step(ctx, be, client, url, opts, &state{})
+	if len(be.Guarded) != 1 || be.Guarded[0] != (firewall.PortProto{Port: 18080, Proto: "tcp"}) {
+		t.Fatalf("guard = %+v, want [18080/tcp] (22 is outside agent_allowed_ports)", be.Guarded)
+	}
+	if got := keyset(t, be); !got["203.0.113.10|tcp|alice|web"] {
+		t.Fatalf("allow rule missing: %v", got)
+	}
+
+	opts.Guard = false
+	step(ctx, be, client, url, opts, &state{})
+	if be.Guarded != nil {
+		t.Fatalf("nft_guard off must remove the guard, got %+v", be.Guarded)
+	}
+
+	be.Guarded = []firewall.PortProto{{Port: 9, Proto: "tcp"}}
+	oldHub, oldClient := hubStub(t, 200, `{"ok":true,"rules":[]}`)
+	step(ctx, be, oldClient, oldHub, Options{Guard: true}, &state{})
+	if len(be.Guarded) != 1 || be.Guarded[0].Port != 9 {
+		t.Fatalf("a hub without ports must leave the guard alone, got %+v", be.Guarded)
+	}
+}
+
+// TestStepRevokedNodeFailsClosed: a 401 (node deleted on the hub) removes the
+// allow rules but keeps the guard; any other failure keeps everything.
+func TestStepRevokedNodeFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	be := firewall.NewMockBackend("nft-okboy")
+	_ = be.AddRule("203.0.113.10", 18080, "alice", "tcp", "web")
+	be.Guarded = []firewall.PortProto{{Port: 18080, Proto: "tcp"}}
+
+	url, client := hubStub(t, 502, "bad gateway")
+	step(ctx, be, client, url, Options{Guard: true}, &state{})
+	if len(keyset(t, be)) != 1 {
+		t.Fatal("a hub outage must not touch the rules")
+	}
+
+	url, client = hubStub(t, 401, `{"ok":false,"error":"Invalid node token"}`)
+	step(ctx, be, client, url, Options{Guard: true}, &state{})
+	if len(keyset(t, be)) != 0 {
+		t.Fatal("a rejected token must remove the allow rules")
+	}
+	if len(be.Guarded) != 1 {
+		t.Fatalf("the guard must stay, got %+v", be.Guarded)
+	}
+}

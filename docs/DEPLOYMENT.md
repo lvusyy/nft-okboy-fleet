@@ -11,6 +11,16 @@ nft-okboy 是**一个二进制**，可按需运行三种模式，并搭配三种
 > **agent 的安全模型**：纯出站连接 hub，**无数据库、不监听任何公网端口**。即便 hub 被攻破，
 > agent 的本地 `agent_allowed_ports` 白名单也能拒绝越界端口（见下）。
 
+> **nftables 后端怎么拦**：受管端口（服务端 = 各组的端口；agent = hub 下发的本节点目标端口，再按
+> `agent_allowed_ports` 收窄）对白名单以外的来源关闭——TCP 丢弃新连接、已建立的会话不断，UDP 丢弃所有数据报，
+> 本机回环不受限。其余端口 nft-okboy 不碰。主机上若还有别的防火墙（ufw、firewalld、nftables.conf）拦着受管端口，
+> 白名单用户照样进不来：nftables 里一条链的放行不是最终结论。此时要么在那边放开该端口（由 nft-okboy 负责筛选），
+> 要么在 ufw 主机上改用 `firewall_backend: ufw`。启动日志会列出检测到的其他防火墙。
+>
+> **从 v0.3.x 升级**：旧版 nftables 后端只加放行规则、实际什么也拦不住（端口对所有人开放，或被主机防火墙全挡）。
+> 升级后受管端口立即对白名单以外关闭。升级前先确认你依赖的访问（比如 SSH 所在的组端口）已经有人敲门；
+> 已建立的会话不受影响。确需旧行为时设 `nft_guard: false`。
+
 下面给出三种典型部署案例。
 
 ---
@@ -27,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deplo
 → 建 admin 并打印一次性密钥。然后：
 
 ```bash
-nft-okboy group-add ssh 22         # 把 22 端口纳管为 "ssh" 组
+nft-okboy group-add ssh 22         # 把 22 端口纳管为 "ssh" 组（此后只放行敲过门的 IP，连上之前别断开当前会话）
 nft-okboy user-join admin ssh      # 授权 admin
 ```
 
@@ -76,6 +86,10 @@ nft-okboy user-add admin --admin    # 建管理员（打印一次性密钥）
 ```
 
 > hub 是新的"皇冠明珠"：用单证书、单入口集中加固它，并开启 `require_admin_totp`。
+>
+> hub 改用 `nftables`/`ufw` 兼自保护时，**每个组自己的端口也在 hub 本机生效**：nftables 后端会把它对白名单以外
+> 关闭。别让组端口与 hub 自己对外的端口（nginx 的 443/80、SSH）重合，否则没敲过门的人连 hub 都进不来、也就没法敲门。
+> 纯控制面用 `none` 最省心。
 
 ### 2) 在 hub 上注册节点 + 配置目标 + 授权用户
 
