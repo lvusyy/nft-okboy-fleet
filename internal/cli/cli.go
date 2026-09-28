@@ -8,6 +8,7 @@ package cli
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -155,6 +156,34 @@ func audit(d *db.DB, action, target, detail string) {
 	if err := d.LogAudit("cli", action, tp, dp); err != nil {
 		log.Printf("audit log failed (%s): %v", action, err)
 	}
+}
+
+// fwFailed reports a firewall change the command could not make (ufw disabled,
+// say) and whether there was one. The database change stands: a running
+// `serve` applies the database to the firewall every 30 seconds. A host rule
+// that decides the access is no failure (the backend has logged it).
+func fwFailed(err error, change, group string) bool {
+	if err == nil || errors.Is(err, firewall.ErrHostRule) {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "Warning: could not %s the firewall rule of group '%s': %v\n", change, group, err)
+	return true
+}
+
+// removeUserRules removes every managed rule of user (user-del, revoke) and
+// reports whether some may be left. A firewall that cannot be driven at all
+// (its program missing, say) does not stop the command: the database change
+// stands, and a running `serve` removes the rules once it can (see fwFailed).
+func removeUserRules(cfg *config.Config, d *db.DB, user string) bool {
+	fw, err := newManager(cfg, d)
+	if err == nil {
+		err = fw.RemoveUserRules(user)
+	}
+	if err == nil {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "Warning: could not remove the firewall rules of '%s': %v\n", user, err)
+	return true
 }
 
 // groupMembersWithIP returns every user with a recorded current IP who is a
@@ -384,19 +413,7 @@ func CmdUserDel(cfgPath string, args []string) error {
 		fmt.Printf("User '%s' not found.\n", username)
 		return nil
 	}
-	fw, err := newManager(cfg, d)
-	if err != nil {
-		return err
-	}
-	if user.CurrentIP != nil && *user.CurrentIP != "" {
-		groups, err := d.GetUserGroups(user.ID, true)
-		if err != nil {
-			return err
-		}
-		for _, g := range groups {
-			_ = fw.RemoveRule(*user.CurrentIP, g.Port, username, g.Proto, g.Name)
-		}
-	}
+	removeUserRules(cfg, d, username)
 	if err := d.DeleteUser(user.ID); err != nil {
 		return err
 	}
@@ -517,10 +534,7 @@ func CmdGroupDel(cfgPath string, args []string) error {
 		fmt.Printf("Group '%s' not found.\n", name)
 		return nil
 	}
-	fw, err := newManager(cfg, d)
-	if err != nil {
-		return err
-	}
+	fw, fwErr := newManager(cfg, d)
 	// The Go db layer exposes no GetGroupMembers, so derive the group's online
 	// members from existing primitives: scan all users, and for each one with a
 	// recorded IP, drop the rule if they belong to this group (any membership —
@@ -531,7 +545,11 @@ func CmdGroupDel(cfgPath string, args []string) error {
 		return err
 	}
 	for _, m := range members {
-		_ = fw.RemoveRule(*m.CurrentIP, group.Port, m.Username, group.Proto, group.Name)
+		err := fwErr
+		if err == nil {
+			err = fw.RemoveRule(*m.CurrentIP, group.Port, m.Username, group.Proto, group.Name)
+		}
+		fwFailed(err, "remove", group.Name)
 	}
 	if err := d.DeleteGroup(group.ID); err != nil {
 		return err
@@ -611,10 +629,10 @@ func CmdUserJoin(cfgPath string, args []string) error {
 	}
 	if user.CurrentIP != nil && *user.CurrentIP != "" {
 		fw, err := newManager(cfg, d)
-		if err != nil {
-			return err
+		if err == nil {
+			err = fw.AddRule(*user.CurrentIP, group.Port, username, group.Proto, group.Name)
 		}
-		_ = fw.AddRule(*user.CurrentIP, group.Port, username, group.Proto, group.Name)
+		fwFailed(err, "add", group.Name)
 	}
 	audit(d, "user_join", username, groupname)
 	fmt.Printf("Added '%s' to group '%s'.\n", username, groupname)
@@ -657,10 +675,10 @@ func CmdUserLeave(cfgPath string, args []string) error {
 	}
 	if user.CurrentIP != nil && *user.CurrentIP != "" {
 		fw, err := newManager(cfg, d)
-		if err != nil {
-			return err
+		if err == nil {
+			err = fw.RemoveRule(*user.CurrentIP, group.Port, username, group.Proto, group.Name)
 		}
-		_ = fw.RemoveRule(*user.CurrentIP, group.Port, username, group.Proto, group.Name)
+		fwFailed(err, "remove", group.Name)
 	}
 	if err := d.RemoveMembership(user.ID, group.ID); err != nil {
 		return err
@@ -739,19 +757,7 @@ func CmdRevoke(cfgPath string, args []string) error {
 		fmt.Printf("User '%s' not found.\n", username)
 		return nil
 	}
-	if user.CurrentIP != nil && *user.CurrentIP != "" {
-		fw, err := newManager(cfg, d)
-		if err != nil {
-			return err
-		}
-		groups, err := d.GetUserGroups(user.ID, true)
-		if err != nil {
-			return err
-		}
-		for _, g := range groups {
-			_ = fw.RemoveRule(*user.CurrentIP, g.Port, username, g.Proto, g.Name)
-		}
-	}
+	left := removeUserRules(cfg, d, username)
 	if err := d.ClearUserState(user.ID); err != nil {
 		return err
 	}
@@ -766,7 +772,11 @@ func CmdRevoke(cfgPath string, args []string) error {
 		}
 	}
 	audit(d, "revoke", username, fmt.Sprintf("rotate=%t", !*noRotate))
-	fmt.Printf("Revoked '%s'. Ports closed, runtime state cleared.\n", username)
+	if left {
+		fmt.Printf("Revoked '%s' and cleared its runtime state; a running 'nft-okboy serve' removes the firewall rules above within 30 seconds once the firewall accepts changes.\n", username)
+	} else {
+		fmt.Printf("Revoked '%s': its firewall rules removed, runtime state cleared.\n", username)
+	}
 	if newSecret != "" {
 		fmt.Printf("New secret (deliver to the user out-of-band): %s\n", newSecret)
 	}

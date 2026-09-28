@@ -25,6 +25,12 @@ type MockBackend struct {
 	Calls  []string // ordered op log (e.g. "AddRule web 1.2.3.4:8080/tcp") — test introspection
 	// Guarded is the port set of the last SyncGuard (nil = no guard).
 	Guarded []PortProto
+	// Inactive makes every rule operation fail with ErrInactive, like ufw while
+	// it is disabled.
+	Inactive bool
+	// HostRules maps "ip:port/proto" to the action of a rule of the host's own
+	// there: AddRule then adds nothing and returns a *HostRuleError, like ufw.
+	HostRules map[string]string
 }
 
 // SyncGuard records the guarded ports (the real nft guard is covered by the
@@ -55,6 +61,12 @@ func (m *MockBackend) EnsureBase() error {
 func (m *MockBackend) AddRule(ip string, port int, user, proto, group string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.Inactive {
+		return ErrInactive
+	}
+	if action, ok := m.HostRules[endpoint(ip, port, proto)]; ok {
+		return &HostRuleError{Action: action}
+	}
 	r := Rule{
 		Handle:  m.next,
 		IP:      ip,
@@ -76,6 +88,9 @@ func (m *MockBackend) AddRule(ip string, port int, user, proto, group string) er
 func (m *MockBackend) RemoveRule(ip string, port int, user, proto, group string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.Inactive {
+		return ErrInactive
+	}
 	want := commentFor(m.prefix, user, group)
 	for i, r := range m.rules {
 		if r.IP == ip && r.Port == port && r.Proto == proto && r.Comment == want {
@@ -93,6 +108,9 @@ func (m *MockBackend) RemoveRule(ip string, port int, user, proto, group string)
 func (m *MockBackend) ListUserRules(user string) ([]Rule, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.Inactive {
+		return nil, ErrInactive
+	}
 	want := m.prefix + ":" + user + ":"
 	var out []Rule
 	for _, r := range m.rules {
@@ -108,6 +126,9 @@ func (m *MockBackend) ListUserRules(user string) ([]Rule, error) {
 func (m *MockBackend) DeleteByHandle(handle int64) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.Inactive {
+		return ErrInactive
+	}
 	for i, r := range m.rules {
 		if r.Handle == handle {
 			m.rules = append(m.rules[:i], m.rules[i+1:]...)
@@ -123,6 +144,9 @@ func (m *MockBackend) DeleteByHandle(handle int64) error {
 func (m *MockBackend) ListManaged() ([]Rule, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.Inactive {
+		return nil, ErrInactive
+	}
 	want := m.prefix + ":"
 	var out []Rule
 	for _, r := range m.rules {

@@ -30,7 +30,7 @@ Sensitive ports (SSH, admin panels, databases, dashboards) should be reachable o
 - **Coexists with other firewalls**: it owns one table, hooked at `input` with priority -150, and never changes anyone else's rules. But an accept in one nftables chain is **not final**: if another firewall on the host (ufw, firewalld, an nftables.conf) drops a managed port, allowlisted users stay blocked. Either open the port there (nft-okboy then does the restricting), or on a ufw host use `firewall_backend: ufw`. Other firewalls found are logged at startup.
 - **Self-healing and expiry**: every 30 seconds the server re-asserts the firewall from the database (a flushed table is recreated, rules left behind by failed deletes are removed); every hour, users who have not knocked for `cleanup_max_age_days` (default 7) days leave the allowlist.
 - **Injection-safe writes**: every change is a JSON transaction piped to `nft -j -f -` (no shell, no command-line interpolation), and rules are deleted precisely by handle.
-- **Choice of backend**: `firewall_backend` is `nftables` (default), `ufw` (drives the host's ufw through the `ufw` command) or `none` (no local firewall, for a control-plane-only hub).
+- **Choice of backend**: `firewall_backend` is `nftables` (default), `ufw` (drives the host's ufw through the `ufw` command, leaving the host's own rules alone) or `none` (no local firewall, for a control-plane-only hub).
 
 ### Security
 
@@ -39,7 +39,7 @@ Sensitive ports (SSH, admin panels, databases, dashboards) should be reachable o
 - **Throttling**: too many authentication failures from one IP get HTTP 429 (counted per IP, not per username, so an attacker cannot lock a legitimate user out); wrong TOTP codes are also capped per account.
 - **Name allowlist**: user, group and node names must start with a letter or digit and contain only letters, digits, `_` and `-`, at most 64 characters, which rules out injection at the source.
 - **Anti-IP-spoofing**: `X-Real-IP` (or, without it, the rightmost `X-Forwarded-For` entry) is trusted only when the direct peer is in `trusted_proxies`, and it must be a single IP; otherwise the knock is refused.
-- **Force offline**: closes the ports, clears the state and rotates the secret, so a leaked secret stops working at once.
+- **Force offline**: removes the user's allow rules at any address (fleet nodes follow at their next successful pull), clears the state and rotates the secret, so a leaked secret stops working at once.
 
 ### Operations
 
@@ -108,7 +108,7 @@ The installer needs root, systemd, `curl` and `sha256sum`, and checks that `nft`
 3. on a first install, writes `/etc/nft-okboy/config.yaml` (nftables backend, listening on `127.0.0.1:5000`), installs and enables `nft-okboy.service`, creates the admin user `admin` and prints its one-time secret, highlighted, at the end;
 4. starts (or restarts) the service.
 
-Re-running it only refreshes the binary; an existing config, database and systemd unit are kept. The installer reads these environment variables (for example `curl … | sudo env NFT_OKBOY_VERSION=v0.4.0 sh`):
+Re-running it only refreshes the binary; an existing config, database and systemd unit are kept. The installer reads these environment variables (for example `curl … | sudo env NFT_OKBOY_VERSION=v0.4.1 sh`):
 
 | Variable | Effect |
 |----------|--------|
@@ -239,7 +239,7 @@ curl -X POST -H "Authorization: HMAC-SHA256 alice:$ts:$sig" https://example.com/
 | `GET /api/admin/users/{user_id}/groups` | every group with the user's membership state | admin |
 | `POST /api/admin/users/{user_id}/groups` | grant a group: `group_id`, optional `enabled` (default true) | admin + step-up |
 | `POST /api/admin/memberships/remove` | revoke a membership: `username`, `group_name` | admin + step-up |
-| `POST /api/admin/users/{user_id}/revoke` | force offline: close the ports, clear the IP, and by default rotate and return a new secret (`rotate_secret: false` keeps it) | admin + step-up |
+| `POST /api/admin/users/{user_id}/revoke` | force offline: remove all of the user's allow rules, clear the IP, and by default rotate and return a new secret (`rotate_secret: false` keeps it) | admin + step-up |
 | `GET /api/admin/groups` | list groups | admin |
 | `POST /api/admin/groups` | create a group: `name`, `port`, optional `proto` (default tcp); subject to `allowed_ports` | admin + step-up |
 | `DELETE /api/admin/groups/{group_id}` | delete a group and clean up its rules | admin + step-up |
@@ -272,7 +272,7 @@ Users and groups
   group-list                                list groups
   user-join <user> <group>                  authorize a user for a group
   user-leave <user> <group>                 revoke the authorization
-  revoke <user> [--no-rotate]               force offline: close the ports, clear the IP, rotate the secret by default
+  revoke <user> [--no-rotate]               force offline: remove the user's allow rules, clear the IP, rotate the secret by default
   totp-uri <user>                           print the otpauth:// URI of the user's TOTP secret
 
 Fleet (run on the hub)

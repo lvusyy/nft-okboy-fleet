@@ -687,7 +687,6 @@ const I18N = {
     status_connecting: "Connecting...",
     status_connected: "Connected",
     status_warning: "Warning",
-    status_anomaly: "Warning: Anomaly Detected",
     status_network_error: "Network Error",
     dash_user: "User",
     dash_next_knock: "Next Knock",
@@ -752,9 +751,9 @@ const I18N = {
     copied: "Copied",
     newSecretDeliver: "New secret — copy and deliver it securely (shown once)",
     // ---- confirm() / prompt() texts ----
-    confirm_revoke: "Revoke {0}?\n\nCloses their open ports, clears their session, and rotates their secret. They must re-authenticate with a NEW secret you deliver to them.",
-    confirm_delete_user: "Delete user {0}?\n\nThis removes the user, closes their open ports, and cannot be undone.",
-    confirm_delete_group: "Delete group {0}?\n\nThis removes the group and closes its members' ports. This cannot be undone.",
+    confirm_revoke: "Revoke {0}?\n\nRemoves their allow rules, clears their session, and rotates their secret. They must re-authenticate with a NEW secret you deliver to them.",
+    confirm_delete_user: "Delete user {0}?\n\nThis removes the user and their allow rules, and cannot be undone.",
+    confirm_delete_group: "Delete group {0}?\n\nThis removes the group and its members' allow rules. This cannot be undone.",
     prompt_totp_revoke: "Enter your 6-digit TOTP code to confirm revoking {0}:",
     prompt_totp_delete_user: "Enter your 6-digit TOTP code to confirm deleting {0}:",
     prompt_totp_delete_group: "Enter your 6-digit TOTP code to confirm deleting group {0}:",
@@ -825,7 +824,6 @@ const I18N = {
     status_connecting: "连接中…",
     status_connected: "已连接",
     status_warning: "警告",
-    status_anomaly: "警告：检测到异常",
     status_network_error: "网络错误",
     dash_user: "用户",
     dash_next_knock: "下次心跳",
@@ -890,9 +888,9 @@ const I18N = {
     copied: "已复制",
     newSecretDeliver: "新密钥——请复制并安全转交（仅显示一次）",
     // ---- confirm() / prompt() texts ----
-    confirm_revoke: "吊销 {0}？\n\n将关闭其已开放的端口、清除其会话，并轮换其密钥。该用户必须使用你交付的新密钥重新认证。",
-    confirm_delete_user: "删除用户 {0}？\n\n这将移除该用户、关闭其已开放的端口，且无法撤销。",
-    confirm_delete_group: "删除分组 {0}？\n\n这将移除该分组并关闭其成员的端口。此操作无法撤销。",
+    confirm_revoke: "吊销 {0}？\n\n将撤掉其放行规则、清除其会话，并轮换其密钥。该用户必须使用你交付的新密钥重新认证。",
+    confirm_delete_user: "删除用户 {0}？\n\n这将移除该用户并撤掉其放行规则，且无法撤销。",
+    confirm_delete_group: "删除分组 {0}？\n\n这将移除该分组并撤掉其成员的放行规则。此操作无法撤销。",
     prompt_totp_revoke: "请输入你的 6 位 TOTP 验证码以确认吊销 {0}：",
     prompt_totp_delete_user: "请输入你的 6 位 TOTP 验证码以确认删除 {0}：",
     prompt_totp_delete_group: "请输入你的 6 位 TOTP 验证码以确认删除分组 {0}：",
@@ -1224,9 +1222,10 @@ async function doKnock() {
         addLog(t("log_heartbeat", currentIP), "ok");
       }
 
-      // Show anomaly warning if credential sharing is suspected
+      // The server's warnings: suspected credential sharing, its firewall
+      // (ufw) not active, a port its own firewall rule keeps closed.
       if (result.warning) {
-        setStatus("warn", t("status_anomaly"));
+        setStatus("warn", t("status_warning"));
         addLog(result.warning, "warn");
       }
     } else {
@@ -1386,6 +1385,15 @@ function addLog(message, type) {
   while (logEl.children.length > MAX_LOG) {
     logEl.lastChild.remove();
   }
+}
+
+// A warning from an admin action whose database change went through (the
+// firewall did not let go of some rules): shown in the admin view, where the
+// admin is looking, and kept in the log.
+function adminWarn(message) {
+  addLog(message, "warn");
+  adminError.textContent = message;
+  adminError.style.display = "block";
 }
 
 function clearLog() {
@@ -1842,14 +1850,16 @@ btnSaveAuth.addEventListener("click", async () => {
   if (btnSaveAuth.disabled) return;
   btnSaveAuth.disabled = true;
   try {
-    let denied = [];
+    const denied = [], warned = [];
     for (const g of myGroupsState) {
       const want = g.checked ? 1 : 0;
       if (g.enabled === want) continue;
       const r = await apiAdmin("PATCH", `/api/me/membership/${g.id}`, { enabled: !!want });
       if (!r.ok) denied.push(`${g.name}: ${r.error || t("err_failed")}`);
+      else if (r.warning) warned.push(`${g.name}: ${r.warning}`);
     }
     await loadAdminConsole();
+    if (warned.length && !denied.length) adminWarn(warned.join("; "));
     if (denied.length) {
       adminError.textContent = t("err_some_denied", denied.join("; "));
       adminError.style.display = "block";
@@ -1904,7 +1914,7 @@ searchGroupsEl.addEventListener("input", () => {
   renderGroups(lastGroups);
 });
 
-// Revoke (event-delegated): close ports + clear state + rotate secret =
+// Revoke (event-delegated): remove allow rules + clear state + rotate secret =
 // the stateless-HMAC way to force a user to re-authenticate.
 adminUsersEl.addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-revoke]");
@@ -1926,6 +1936,7 @@ adminUsersEl.addEventListener("click", async (e) => {
     }
     await loadAdminConsole();
     if (newSecret) showSecret(newSecret); // persistent reveal, survives re-render
+    if (r.warning) adminWarn(r.warning); // after the reload, which hides the error line
   } else {
     adminError.textContent = r.error || t("err_revoke_failed");
     adminError.style.display = "block";
@@ -1948,6 +1959,7 @@ adminUsersEl.addEventListener("click", async (e) => {
     openGroupPanels.delete(String(id));
     addLog(t("log_deleted_user", name), "ok");
     await loadAdminConsole();
+    if (r.warning) adminWarn(r.warning);
   } else {
     adminError.textContent = r.error || t("err_delete_failed");
     adminError.style.display = "block";
@@ -2022,6 +2034,8 @@ adminUsersEl.addEventListener("change", async (e) => {
     if (!r.ok) {
       adminError.textContent = r.error || t("err_group_change_failed");
       adminError.style.display = "block";
+    } else if (r.warning) {
+      adminWarn(r.warning);
     }
   } catch (err) {
     adminError.textContent = err.message;
@@ -2047,6 +2061,7 @@ adminGroupsEl.addEventListener("click", async (e) => {
   if (r.ok) {
     addLog(t("log_deleted_group", name), "ok");
     await loadAdminConsole();
+    if (r.warning) adminWarn(r.warning);
   } else {
     adminError.textContent = r.error || t("err_delete_failed");
     adminError.style.display = "block";

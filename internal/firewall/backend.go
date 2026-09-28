@@ -10,11 +10,32 @@
 package firewall
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
 	"strings"
 )
+
+// ErrInactive: the firewall is not enforcing (ufw is disabled). ufw then lists no
+// rules although it keeps them saved, so nothing can be listed, removed or
+// reconciled reliably until it is enabled again.
+var ErrInactive = errors.New("ufw is inactive: nft-okboy cannot list or change its rules until ufw is enabled (allow SSH first)")
+
+// ErrHostRule: AddRule left the host's own rule for the same source, port and
+// protocol in charge instead of adding a managed one over it (ufw would have
+// rewritten that rule: a host ALLOW would become nft-okboy's, a host DENY an
+// ALLOW). Not a failure: the host rule decides that source's access.
+var ErrHostRule = errors.New("a host rule for the same source, port and protocol decides this access")
+
+// HostRuleError is the ErrHostRule of UfwBackend.AddRule, with the host rule's
+// action: ALLOW, DENY, REJECT or LIMIT.
+type HostRuleError struct{ Action string }
+
+func (e *HostRuleError) Error() string { return ErrHostRule.Error() + " (" + e.Action + ")" }
+
+// Is makes errors.Is(err, ErrHostRule) hold.
+func (e *HostRuleError) Is(target error) bool { return target == ErrHostRule }
 
 // Rule is the backend-neutral view of one managed allow rule. It mirrors the
 // dict that ufw_ops.list_rules_by_comment returned; Handle is the nftables rule

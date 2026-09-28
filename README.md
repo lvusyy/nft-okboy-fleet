@@ -30,7 +30,7 @@
 - **与其他防火墙共存**：独占一张表，挂在 `input` 钩子上、优先级 -150，不改动别人的规则。但 nftables 里一条链的放行**不是最终结论**：主机上另有防火墙（ufw、firewalld、nftables.conf）拦着受管端口时，白名单用户照样进不来。这时要么在那边放开该端口（由 nft-okboy 负责筛选），要么在 ufw 主机上改用 `firewall_backend: ufw`。启动日志会列出检测到的其他防火墙。
 - **自愈与过期**：服务每 30 秒按数据库校正一次防火墙（表被清空会重建，删除失败遗留的规则会被清掉）；每小时把超过 `cleanup_max_age_days`（默认 7）天没敲门的用户移出白名单。
 - **防注入写入**：每次变更都是经 `nft -j -f -` 提交的 JSON 事务（不经 shell、不拼接命令行参数），并按规则 handle 精确删除。
-- **可选后端**：`firewall_backend` 可选 `nftables`（默认）、`ufw`（通过 `ufw` 命令管理主机的 ufw），或 `none`（不管理本机防火墙，用于只做控制面的 hub）。
+- **可选后端**：`firewall_backend` 可选 `nftables`（默认）、`ufw`（通过 `ufw` 命令管理主机的 ufw，不改写主机自己的规则），或 `none`（不管理本机防火墙，用于只做控制面的 hub）。
 
 ### 安全
 
@@ -39,7 +39,7 @@
 - **限流**：同一 IP 认证失败过多时返回 HTTP 429（按 IP 而不是用户名计数，攻击者无法借此锁死正常用户）；TOTP 验证码错误另按账号封顶。
 - **名称白名单**：用户名、组名和节点名必须以字母或数字开头，只含字母、数字、`_` 和 `-`，最长 64 个字符，从源头杜绝注入。
 - **防 IP 伪造**：只有直连对端在 `trusted_proxies` 里时，才采信 `X-Real-IP`（没有时取 `X-Forwarded-For` 的最右一项），而且必须是单个 IP，否则拒绝敲门。
-- **强制下线**：关闭端口、清除状态并轮换密钥，泄露的密钥立即失效。
+- **强制下线**：撤掉该用户在任何地址上的放行规则（fleet 节点在下一次成功拉取时跟上）、清除状态并轮换密钥，泄露的密钥立即失效。
 
 ### 运维
 
@@ -108,7 +108,7 @@ curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deplo
 3. 首次安装时写入 `/etc/nft-okboy/config.yaml`（默认 nftables 后端，监听 `127.0.0.1:5000`），安装并启用 `nft-okboy.service`，创建管理员 `admin`，并在最后高亮打印它的一次性密钥。
 4. 启动（或重启）服务。
 
-重复运行只刷新二进制，已有的配置、数据库和 systemd 单元都保留。安装脚本读取以下环境变量（例如 `curl … | sudo env NFT_OKBOY_VERSION=v0.4.0 sh`）：
+重复运行只刷新二进制，已有的配置、数据库和 systemd 单元都保留。安装脚本读取以下环境变量（例如 `curl … | sudo env NFT_OKBOY_VERSION=v0.4.1 sh`）：
 
 | 变量 | 作用 |
 |------|------|
@@ -239,7 +239,7 @@ curl -X POST -H "Authorization: HMAC-SHA256 alice:$ts:$sig" https://example.com/
 | `GET /api/admin/users/{user_id}/groups` | 所有组及该用户在各组中的成员状态 | 管理员 |
 | `POST /api/admin/users/{user_id}/groups` | 授予组：`group_id`，可选 `enabled`（默认 true） | 管理员 + step-up |
 | `POST /api/admin/memberships/remove` | 撤销成员资格：`username`、`group_name` | 管理员 + step-up |
-| `POST /api/admin/users/{user_id}/revoke` | 强制下线：关闭端口、清除 IP，默认轮换并返回新密钥（`rotate_secret: false` 不轮换） | 管理员 + step-up |
+| `POST /api/admin/users/{user_id}/revoke` | 强制下线：撤掉该用户的全部放行规则、清除 IP，默认轮换并返回新密钥（`rotate_secret: false` 不轮换） | 管理员 + step-up |
 | `GET /api/admin/groups` | 列出组 | 管理员 |
 | `POST /api/admin/groups` | 创建组：`name`、`port`，可选 `proto`（默认 tcp）；受 `allowed_ports` 限制 | 管理员 + step-up |
 | `DELETE /api/admin/groups/{group_id}` | 删除组并清理规则 | 管理员 + step-up |
@@ -271,7 +271,7 @@ nft-okboy [-c <配置文件>] <命令> [参数]      选项可以写在位置参
   group-list                                列出组
   user-join <用户名> <组名>                 授权用户使用组
   user-leave <用户名> <组名>                撤销授权
-  revoke <用户名> [--no-rotate]             强制下线：关闭端口、清除 IP，默认轮换密钥
+  revoke <用户名> [--no-rotate]             强制下线：撤掉该用户的全部放行规则、清除 IP，默认轮换密钥
   totp-uri <用户名>                         打印该用户 TOTP 密钥的 otpauth:// URI
 
 Fleet（在 hub 上执行）

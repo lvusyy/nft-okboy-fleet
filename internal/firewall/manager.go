@@ -65,6 +65,30 @@ func (m *Manager) RemoveRule(ip string, port int, user, proto, group string) err
 	return nil
 }
 
+// RemoveUserRules deletes every managed rule of user, whatever its address or
+// group — for a revoke or a deleted user, where rules left at an earlier
+// address (a failed delete, or ufw restoring them when re-enabled) must go as
+// well, and so must a rule in the older "<prefix>:<user>" format without a
+// group. It returns the joined errors of the rules it could not delete.
+func (m *Manager) RemoveUserRules(user string) error {
+	rules, err := m.be.ListManaged()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, r := range rules {
+		if r.User != user {
+			continue
+		}
+		if derr := m.be.DeleteByHandle(r.Handle); derr != nil {
+			errs = append(errs, fmt.Errorf("%s -> %d/%s: %w", r.IP, r.Port, r.Proto, derr))
+			continue
+		}
+		log.Printf("firewall: removed rule %s -> port %d/%s (%s)", r.IP, r.Port, r.Proto, r.Comment)
+	}
+	return errors.Join(errs...)
+}
+
 // Reconcile idempotently aligns this user's firewall rules with their
 // enabled groups at clientIP — the direct port of reconcile_user_rules.
 //
@@ -77,12 +101,16 @@ func (m *Manager) RemoveRule(ip string, port int, user, proto, group string) err
 //     membership changes, cross-group collisions, AND stale old-IP rules for
 //     groups that are still enabled.
 //
+// A group whose port a rule of the host's own decides for clientIP (ufw) is
+// neither added nor a failure; when that rule denies or rejects, the group is
+// recorded in denied, so the caller can say why the knock did not open it.
+//
 // The group name is parsed out of each rule's comment ("<prefix>:<user>:<group>").
-func (m *Manager) Reconcile(user, clientIP string, enabled map[string]PortProto) (added, removed []string, err error) {
+func (m *Manager) Reconcile(user, clientIP string, enabled map[string]PortProto) (added, removed, denied []string, err error) {
 	// Single pass: fetch all of this user's rules once (fixes N+1).
 	rules, err := m.be.ListUserRules(user)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Index existing rules by their identity tuple for the membership test.
@@ -109,6 +137,14 @@ func (m *Manager) Reconcile(user, clientIP string, enabled map[string]PortProto)
 			// caller — e.g. the knock handler — can report it instead of falsely
 			// claiming success with a port that was never opened.
 			if aerr := m.AddRule(clientIP, pp.Port, user, pp.Proto, group); aerr != nil {
+				if errors.Is(aerr, ErrHostRule) {
+					// The host's own rule decides this access (the backend logged it once).
+					var hr *HostRuleError
+					if errors.As(aerr, &hr) && (hr.Action == "DENY" || hr.Action == "REJECT") {
+						denied = append(denied, group)
+					}
+					continue
+				}
 				log.Printf("firewall: reconcile failed to add rule for group %s (%d/%s): %v",
 					group, pp.Port, pp.Proto, aerr)
 				addErrs = append(addErrs, fmt.Errorf("add %s (%d/%s): %w", group, pp.Port, pp.Proto, aerr))
@@ -143,7 +179,7 @@ func (m *Manager) Reconcile(user, clientIP string, enabled map[string]PortProto)
 	// Surface any per-group add failures AFTER the stale-removal pass has run, so
 	// the self-heal still happens but the caller learns a rule could not be
 	// applied. errors.Join(nil...) is nil, so the success path is unchanged.
-	return added, removed, errors.Join(addErrs...)
+	return added, removed, denied, errors.Join(addErrs...)
 }
 
 // CheckIPAnomaly detects suspicious IP-change churn that suggests credential

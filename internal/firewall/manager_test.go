@@ -1,6 +1,7 @@
 package firewall
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"testing"
@@ -159,7 +160,7 @@ func TestReconcile(t *testing.T) {
 			seed(t, be, tc.seedRules)
 			m := NewManager(be, nil, testPrefix)
 
-			added, removed, err := m.Reconcile(user, tc.clientIP, tc.enabled)
+			added, removed, _, err := m.Reconcile(user, tc.clientIP, tc.enabled)
 			if err != nil {
 				t.Fatalf("Reconcile: %v", err)
 			}
@@ -195,12 +196,12 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	m := NewManager(be, nil, testPrefix)
 	enabled := map[string]PortProto{"web": {Port: 8080, Proto: "tcp"}}
 
-	if _, _, err := m.Reconcile(user, "10.0.0.1", enabled); err != nil {
+	if _, _, _, err := m.Reconcile(user, "10.0.0.1", enabled); err != nil {
 		t.Fatalf("first Reconcile: %v", err)
 	}
 	be.Calls = nil
 
-	added, removed, err := m.Reconcile(user, "10.0.0.1", enabled)
+	added, removed, _, err := m.Reconcile(user, "10.0.0.1", enabled)
 	if err != nil {
 		t.Fatalf("second Reconcile: %v", err)
 	}
@@ -241,5 +242,31 @@ func TestPreciseRemoveAcrossGroups(t *testing.T) {
 	}
 	if rules[0].Group != "api" || rules[0].Proto != "udp" {
 		t.Errorf("wrong rule survived: %+v", rules[0])
+	}
+}
+
+// TestRemoveUserRules: every rule of the user goes, at any address and in the
+// older comment format without a group; other users' rules stay.
+func TestRemoveUserRules(t *testing.T) {
+	be := NewMockBackend(testPrefix)
+	_ = be.AddRule("203.0.113.7", 22, "alice", "tcp", "ssh")
+	_ = be.AddRule("198.51.100.9", 8080, "alice", "tcp", "web") // an earlier address
+	_ = be.AddRule("203.0.113.8", 22, "bob", "tcp", "ssh")
+	be.mu.Lock()
+	be.rules = append(be.rules, Rule{Handle: 99, IP: "198.51.100.10", Port: 22, Proto: "tcp",
+		User: "alice", Comment: testPrefix + ":alice"}) // the older format
+	be.mu.Unlock()
+
+	m := NewManager(be, nil, testPrefix)
+	if err := m.RemoveUserRules("alice"); err != nil {
+		t.Fatalf("RemoveUserRules: %v", err)
+	}
+	rules, _ := be.ListManaged()
+	if len(rules) != 1 || rules[0].User != "bob" {
+		t.Fatalf("left %+v, want only bob's rule", rules)
+	}
+	be.Inactive = true
+	if err := m.RemoveUserRules("bob"); !errors.Is(err, ErrInactive) {
+		t.Fatalf("RemoveUserRules with ufw inactive: %v, want ErrInactive", err)
 	}
 }

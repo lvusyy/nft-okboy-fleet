@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"time"
 
@@ -53,9 +54,12 @@ func (s *Server) Maintain() {
 		rules = append(rules, firewall.Rule{IP: d.IP, Port: d.Port, Proto: d.Proto, User: d.User, Group: d.Group})
 	}
 	added, removed, err := s.fw.ReconcileAll(rules)
-	if err != nil {
+	switch {
+	case errors.Is(err, firewall.ErrInactive):
+		// ufw is disabled: EnsureBase already warned; nothing changes until it is enabled.
+	case err != nil:
 		log.Printf("maintain: reconcile (partial, +%d/-%d): %v", added, removed, err)
-	} else if added > 0 || removed > 0 {
+	case added > 0 || removed > 0:
 		log.Printf("maintain: repaired firewall drift (+%d/-%d rules)", added, removed)
 	}
 	if err := s.syncGuard(); err != nil {
