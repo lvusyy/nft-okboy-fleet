@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -22,14 +23,24 @@ import (
 type DB struct {
 	sql  *sql.DB
 	path string
+	// fresh: Init had to create the users table, i.e. this DB is brand new.
+	fresh bool
 }
 
 type scanner interface{ Scan(...any) error }
 
 // Open opens (creating parent dirs) the SQLite DB with the required PRAGMAs.
+//
+// The DB holds every user's HMAC secret and TOTP seed in plaintext (both must be
+// usable server-side), so it is owner-only: new parent dirs are 0700 and the DB
+// file (plus any -wal/-shm) is set to 0600 on every open — SQLite itself would
+// create it 0644 under the usual umask, readable by every local user wherever
+// db_path does not sit inside the installer's 0700 data dir. Failing to change
+// the mode (a file owned by another user, a filesystem without modes) is logged,
+// not fatal.
 func Open(path string) (*DB, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
 	}
@@ -41,6 +52,20 @@ func Open(path string) (*DB, error) {
 	if err := sdb.Ping(); err != nil {
 		return nil, err
 	}
+	// The database holds plaintext secrets. Some filesystems refuse chmod; that
+	// is tolerated only while nobody else can read the file anyway.
+	for _, f := range []string{path, path + "-wal", path + "-shm"} {
+		err := os.Chmod(f, 0o600)
+		if err == nil || os.IsNotExist(err) {
+			continue
+		}
+		if st, serr := os.Stat(f); serr == nil && st.Mode().Perm()&0o077 == 0 {
+			log.Printf("warning: could not chmod %s (%v); it is owner-only already", f, err)
+			continue
+		}
+		_ = sdb.Close()
+		return nil, fmt.Errorf("%s holds plaintext secrets and is readable by other users, and chmod 600 failed: %w", f, err)
+	}
 	return &DB{sql: sdb, path: path}, nil
 }
 
@@ -48,6 +73,10 @@ func Open(path string) (*DB, error) {
 func (d *DB) Conn() *sql.DB { return d.sql }
 func (d *DB) Close() error  { return d.sql.Close() }
 func (d *DB) Path() string  { return d.path }
+
+// Fresh reports whether Init created this database (it had no users table): the
+// one moment a first-run seed may add users.
+func (d *DB) Fresh() bool { return d.fresh }
 
 // Init creates any missing tables, runs pending migrations, and ensures indexes.
 func (d *DB) Init() error {
@@ -61,6 +90,9 @@ func (d *DB) Init() error {
 		}
 		if _, err := d.sql.Exec(schemaDDL[name]); err != nil {
 			return fmt.Errorf("create table %s: %w", name, err)
+		}
+		if name == "users" {
+			d.fresh = true
 		}
 	}
 	if _, err := d.RunMigrations(); err != nil {
@@ -570,6 +602,16 @@ func (d *DB) CountRecentFailedAttempts(ip string, windowSec int) (int, error) {
 	return c, err
 }
 
+// CountRecentUserFailures counts username's failed attempts recorded with reason
+// within windowSec, from any IP — an account-level cap that per-IP throttling
+// cannot give against an attacker with many addresses.
+func (d *DB) CountRecentUserFailures(username, reason string, windowSec int) (int, error) {
+	var c int
+	err := d.sql.QueryRow(`SELECT COUNT(*) FROM failed_attempts WHERE username=? AND reason=? AND created_at >= datetime('now', ?)`,
+		username, reason, fmt.Sprintf("-%d seconds", windowSec)).Scan(&c)
+	return c, err
+}
+
 func (d *DB) CountRecentIPChanges(username string, windowSec int) (int, error) {
 	var c int
 	err := d.sql.QueryRow(`SELECT COUNT(*) FROM operation_log WHERE username=? AND action='ip_change' AND created_at >= datetime('now', ?)`,
@@ -600,13 +642,21 @@ func (d *DB) GetRecentIPChangeIPs(username string, windowSec int) ([]string, err
 // ---- Backup ---- //
 
 // Backup writes a consistent snapshot via VACUUM INTO (safe under WAL) and a
-// sidecar .sha256 checksum, returning the hex digest.
+// sidecar .sha256 checksum, returning the hex digest. The snapshot carries the
+// same plaintext secrets as the DB, so it is owner-only too (see Open): the file
+// is created empty with mode 0600 BEFORE VACUUM INTO fills it (which SQLite
+// allows), so it is never readable by others, not even while being written.
 func (d *DB) Backup(dest string) (string, error) {
 	if dir := filepath.Dir(dest); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", err
 		}
 	}
+	empty, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", err
+	}
+	empty.Close()
 	if _, err := d.sql.Exec(`VACUUM INTO ?`, dest); err != nil {
 		return "", err
 	}

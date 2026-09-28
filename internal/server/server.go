@@ -12,6 +12,7 @@ package server
 
 import (
 	"net/http"
+	"sync"
 
 	"nft-okboy-fleet/internal/config"
 	"nft-okboy-fleet/internal/db"
@@ -26,6 +27,8 @@ type Server struct {
 	fw      *firewall.Manager
 	cfg     *config.Config
 	version string
+
+	totpMu sync.Mutex // makes each TOTP check atomic with its cap (totpAttempt)
 }
 
 // NewServer constructs a Server from its dependencies. Version defaults to "dev"

@@ -160,6 +160,9 @@ func (n *NftBackend) EnsureBase() error {
 // AddRule appends an accept rule matching `ip saddr <ip>` (ip6 for v6) and
 // `<proto> dport <port>`, carrying the comment "<prefix>:<user>:<group>".
 func (n *NftBackend) AddRule(ip string, port int, user, proto, group string) error {
+	if err := checkRule(ip, port, proto); err != nil {
+		return err
+	}
 	expr := n.matchExpr(ip, port, proto)
 	expr = append(expr, map[string]any{"accept": nil})
 

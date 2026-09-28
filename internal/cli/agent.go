@@ -2,8 +2,11 @@ package cli
 
 import (
 	"context"
+	"crypto/x509"
 	"flag"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -23,16 +26,45 @@ import (
 func CmdAgent(cfgPath, version string, args []string) error {
 	fs := flag.NewFlagSet("agent", flag.ContinueOnError)
 	hub := fs.String("hub", "", "Hub base URL, e.g. https://hub.example/")
-	token := fs.String("token", "", "Node enrollment token (from `node-add`)")
+	token := fs.String("token", "", "Node enrollment token (from `node-add`); default: $NFT_OKBOY_TOKEN")
 	node := fs.String("node", "", "Node name (for logging)")
 	interval := fs.Int("interval", 15, "Pull interval in seconds")
-	insecure := fs.Bool("insecure", false, "Skip TLS verification (self-signed hub cert)")
+	caFile := fs.String("ca", "", "PEM file to trust for the hub certificate: its CA, or the self-signed certificate itself")
+	insecure := fs.Bool("insecure", false, "Skip TLS verification of the hub (anyone on the path can pose as the hub; prefer --ca)")
+	allowHTTP := fs.Bool("allow-http", false, "Accept a plain-http hub on a non-loopback address (e.g. a hub Service inside a trusted cluster network)")
 	allowPorts := fs.String("allow-ports", "", "Comma-separated ports this agent may open (overrides config agent_allowed_ports)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
+	// The token normally comes from the environment (systemd EnvironmentFile), so
+	// it never appears in the process arguments, which every local user can read.
+	if *token == "" {
+		*token = os.Getenv("NFT_OKBOY_TOKEN")
+	}
 	if *hub == "" || *token == "" {
-		return fmt.Errorf("usage: agent --hub <url> --token <token> [--node <name>] [--interval 15] [--insecure] [--allow-ports 18080,443]")
+		return fmt.Errorf("usage: agent --hub <url> [--node <name>] [--interval 15] [--ca <pem> | --insecure] [--allow-ports 18080,443]  (token: $NFT_OKBOY_TOKEN or --token)")
+	}
+	// NFT_OKBOY_ALLOW_HTTP=1 (e.g. in agent.env) is the same opt-in as --allow-http,
+	// for deployments whose command line is fixed by a shipped unit or a manifest.
+	if os.Getenv("NFT_OKBOY_ALLOW_HTTP") == "1" {
+		*allowHTTP = true
+	}
+	if err := checkHubURL(*hub, *allowHTTP); err != nil {
+		return err
+	}
+	if *insecure && *caFile != "" {
+		return fmt.Errorf("--ca and --insecure are mutually exclusive")
+	}
+	var roots *x509.CertPool
+	if *caFile != "" {
+		pem, err := os.ReadFile(*caFile)
+		if err != nil {
+			return fmt.Errorf("--ca: %w", err)
+		}
+		roots = x509.NewCertPool()
+		if !roots.AppendCertsFromPEM(pem) {
+			return fmt.Errorf("--ca %s: no PEM certificate found", *caFile)
+		}
 	}
 
 	cfg, err := config.Load(cfgPath)
@@ -69,8 +101,31 @@ func CmdAgent(cfgPath, version string, args []string) error {
 		NodeName:     *node,
 		Interval:     time.Duration(*interval) * time.Second,
 		Insecure:     *insecure,
+		RootCAs:      roots,
 		AllowedPorts: allowed,
 		Version:      version,
 		Backend:      cfg.FirewallBackend,
 	})
+}
+
+// checkHubURL accepts https hubs; plain http only on loopback (a hub on the same
+// host, or a test) unless allowHTTP opts in — anywhere else the bearer token and
+// the desired firewall state would cross the network unprotected.
+func checkHubURL(raw string, allowHTTP bool) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fmt.Errorf("--hub %q is not a URL", raw)
+	}
+	switch u.Scheme {
+	case "https":
+		return nil
+	case "http":
+		h := u.Hostname()
+		if ip := net.ParseIP(h); allowHTTP || h == "localhost" || (ip != nil && ip.IsLoopback()) {
+			return nil
+		}
+		return fmt.Errorf("refusing plain-http hub %s: the node token would travel unencrypted; use https (with --ca for a self-signed hub), or --allow-http inside a trusted network", raw)
+	default:
+		return fmt.Errorf("--hub must be an https:// URL, got %q", raw)
+	}
 }

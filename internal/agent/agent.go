@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -15,13 +16,14 @@ import (
 
 // Options configures the agent loop.
 type Options struct {
-	HubURL   string        // hub base URL, e.g. https://hub.example/
-	Token    string        // node enrollment token (bearer)
-	NodeName string        // for logging only
-	Interval time.Duration // pull cadence
-	Insecure bool          // skip TLS verification (self-signed hub cert)
-	Version  string        // agent binary version, self-reported to the hub (fleet view)
-	Backend  string        // firewall backend name, self-reported to the hub
+	HubURL   string         // hub base URL, e.g. https://hub.example/
+	Token    string         // node enrollment token (bearer)
+	NodeName string         // for logging only
+	Interval time.Duration  // pull cadence
+	Insecure bool           // skip TLS verification (self-signed hub cert) — prefer RootCAs
+	RootCAs  *x509.CertPool // when set, the only trust store for the hub certificate (its CA, or the self-signed cert)
+	Version  string         // agent binary version, self-reported to the hub (fleet view)
+	Backend  string         // firewall backend name, self-reported to the hub
 	// AllowedPorts is the node's local guard: when non-empty, the agent opens
 	// ONLY these ports and refuses any hub-supplied rule on another port — so a
 	// compromised hub still cannot tell this node to open, say, SSH. Empty = all.
@@ -54,10 +56,10 @@ func Run(ctx context.Context, be firewall.FirewallBackend, opts Options) error {
 	if err := be.EnsureBase(); err != nil {
 		return fmt.Errorf("firewall base init: %w", err)
 	}
-	client := &http.Client{Timeout: opts.Interval + 10*time.Second}
 	if opts.Insecure {
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+		log.Printf("agent: WARNING: --insecure — the hub certificate is NOT verified; anyone on the path can pose as the hub and steal the node token (pin it with --ca instead)")
 	}
+	client := newClient(opts)
 	url := strings.TrimRight(opts.HubURL, "/") + "/api/v1/node/desired-state"
 	log.Printf("agent: node=%q hub=%s interval=%s", opts.NodeName, url, opts.Interval)
 
@@ -65,7 +67,7 @@ func Run(ctx context.Context, be firewall.FirewallBackend, opts Options) error {
 		if desired, err := fetch(ctx, client, url, opts); err != nil {
 			log.Printf("agent: pull failed, keeping current rules: %v", err)
 		} else {
-			desired = filterAllowed(desired, opts.AllowedPorts)
+			desired = filterAllowed(sanitize(desired), opts.AllowedPorts)
 			added, removed, rerr := Reconcile(be, desired)
 			switch {
 			case rerr != nil:
@@ -80,6 +82,26 @@ func Run(ctx context.Context, be firewall.FirewallBackend, opts Options) error {
 			return nil
 		case <-time.After(opts.Interval):
 		}
+	}
+}
+
+// newClient builds the hub client: TLS verified against the system roots, or
+// against opts.RootCAs only when set (a pinned CA / self-signed hub cert), or not
+// at all with opts.Insecure.
+func newClient(opts Options) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	switch {
+	case opts.Insecure:
+		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	case opts.RootCAs != nil:
+		transport.TLSClientConfig = &tls.Config{RootCAs: opts.RootCAs}
+	}
+	return &http.Client{
+		Timeout:   opts.Interval + 10*time.Second,
+		Transport: transport,
+		// Never follow a redirect: the bearer token goes to the configured hub URL
+		// only, and a redirect could lead it elsewhere or down to plain http.
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 }
 
@@ -158,6 +180,26 @@ func Reconcile(be firewall.FirewallBackend, desired []rule) (added, removed int,
 		removed++
 	}
 	return added, removed, err
+}
+
+// sanitize drops every hub rule that is not one IP address on a valid port and
+// protocol for well-formed user/group names, and canonicalizes the IP so it
+// compares equal to what the firewall lists back. A compromised hub must not be
+// able to smuggle "any" or a CIDR into a rule (ufw reads both as "everyone").
+func sanitize(desired []rule) []rule {
+	var out []rule
+	for _, d := range desired {
+		ip := firewall.CanonicalIP(d.IP)
+		if ip == "" || d.Port < 1 || d.Port > 65535 || (d.Proto != "tcp" && d.Proto != "udp") ||
+			!firewall.ValidName(d.User) || !firewall.ValidName(d.Group) {
+			log.Printf("agent: REFUSED malformed hub rule ip=%q port=%d proto=%q user=%q group=%q — possible hostile hub",
+				d.IP, d.Port, d.Proto, d.User, d.Group)
+			continue
+		}
+		d.IP = ip
+		out = append(out, d)
+	}
+	return out
 }
 
 // filterAllowed drops every desired rule whose port is not in allowed — the

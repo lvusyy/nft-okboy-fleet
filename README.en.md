@@ -124,11 +124,18 @@ Prebuilt static `linux` binaries are attached to every [release](https://github.
 curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deploy/install.sh | sudo sh
 ```
 
-The script picks the right binary for your arch (sha256-verified) → writes
-`/etc/nft-okboy/config.yaml` (production-sane defaults) → installs and enables the
-systemd service → **creates an `admin` account and prints its one-time secret,
-highlighted, at the end**. Re-run any time to refresh the binary (config and
+The script picks the right binary for your arch (verified against the sha256
+GitHub publishes; it aborts if that checksum cannot be fetched or does not match)
+→ writes `/etc/nft-okboy/config.yaml` (production-sane defaults) → installs and
+enables the systemd service → **creates an `admin` account and prints its one-time
+secret, highlighted, at the end**. Re-run any time to refresh the binary (config and
 database are preserved). Pin a version with `NFT_OKBOY_VERSION=vX.Y.Z`.
+
+Only the binary itself may come through the built-in CN mirrors; the checksum,
+config and systemd unit always come from GitHub directly. When GitHub is
+unreachable, pass the checksum from the release page as `NFT_OKBOY_SHA256=<hex>`,
+or name a mirror you trust as much as GitHub with `NFT_OKBOY_GH_MIRROR=<prefix>`.
+(Fetching `install.sh` itself through a mirror already means trusting that mirror.)
 
 Open your first group, authorize the admin, then open the Web console and Connect:
 
@@ -140,7 +147,7 @@ nft-okboy user-join admin ssh    # authorize admin for it
 ### Upgrade
 
 ```bash
-sudo nft-okboy upgrade           # self-update (backup DB → verify → restart → rollback on failure)
+sudo nft-okboy upgrade           # self-update (sha256 from GitHub → backup DB → download + verify → restart → rollback on failure)
 sudo nft-okboy upgrade --check   # check only, do not install
 ```
 

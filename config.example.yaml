@@ -68,7 +68,9 @@ backup_dir: /var/lib/nft-okboy/backups
 backup_keep: 7
 
 # ---- First-run user seed (optional) ----
-# On a FRESH db these users are created once. Generate a secret with:
+# On a FRESH db (no users yet) these users are created once, as non-admins; after
+# that this section is ignored. Secrets shorter than 32 characters are skipped.
+# Generate a secret with:
 #   nft-okboy gen-secret alice
 # users:
 #   admin:

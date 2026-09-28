@@ -21,7 +21,10 @@ NoNewPrivileges=yes
 ProtectHome=yes
 PrivateTmp=yes
 ProtectSystem=full
-ReadWritePaths=/var/lib/nft-okboy
+# The DB lives in /var/lib/nft-okboy. With firewall_backend: ufw the service also
+# rewrites /etc/ufw, which ProtectSystem=full would otherwise make read-only; the
+# "-" prefix skips those paths on a host without ufw.
+ReadWritePaths=/var/lib/nft-okboy -/etc/ufw -/lib/ufw
 RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
 
 [Install]

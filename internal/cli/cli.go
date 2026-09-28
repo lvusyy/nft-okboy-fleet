@@ -32,6 +32,31 @@ const totpIssuer = "nft-okboy"
 //  Shared helpers
 // ====================================================================== //
 
+// parseFlags is fs.Parse that also accepts flags AFTER positional arguments —
+// the order the usage text documents (`user-add alice --admin`, `group-add web
+// 8080 --proto udp`). Go's flag package stops at the first positional, which
+// silently ignored those flags (the installer's "admin" was created without
+// --admin). Everything after an explicit "--" stays positional.
+func parseFlags(fs *flag.FlagSet, args []string) error {
+	var pos []string
+	for len(args) > 0 {
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		rest := fs.Args()
+		if len(rest) == 0 {
+			break
+		}
+		if n := len(args) - len(rest); n > 0 && args[n-1] == "--" {
+			pos = append(pos, rest...)
+			break
+		}
+		pos = append(pos, rest[0])
+		args = rest[1:]
+	}
+	return fs.Parse(append([]string{"--"}, pos...))
+}
+
 // genSecret returns a fresh 32-byte secret as lowercase hex — the exact analogue
 // of Python's secrets.token_hex(32) (64 hex chars).
 func genSecret() (string, error) {
@@ -58,11 +83,21 @@ func openDB(cfg *config.Config) (*db.DB, error) {
 	return d, nil
 }
 
+// minSeedSecret is the shortest config secret the first-run seed accepts. It
+// keeps placeholders such as the example's "<64 hex chars>" (or "changeme") from
+// becoming live credentials; gen-secret prints 64 hex characters.
+const minSeedSecret = 32
+
 // seedUsers performs the one-time first-run seed of the config `users:` map into
-// the DB (mirrors the Python open_database bootstrap): each configured user not
-// already present is created with its config secret. Idempotent — existing users
-// are untouched. Invalid names are skipped with a warning (SR-1).
+// the DB (mirrors the Python open_database bootstrap). It runs only when Init has
+// just created the database — a fresh install — as config.example.yaml documents.
+// Seeding on later starts (even once every user has been deleted) would resurrect,
+// with its old (possibly leaked) config secret, a user an admin had removed.
+// Invalid names (SR-1) and short secrets are skipped with a warning.
 func seedUsers(cfg *config.Config, d *db.DB) {
+	if len(cfg.Users) == 0 || !d.Fresh() {
+		return
+	}
 	for name, u := range cfg.Users {
 		if u.Secret == "" {
 			continue
@@ -71,12 +106,8 @@ func seedUsers(cfg *config.Config, d *db.DB) {
 			log.Printf("seed: skipping invalid username %q", name)
 			continue
 		}
-		existing, err := d.GetUserByUsername(name)
-		if err != nil {
-			log.Printf("seed: lookup %q failed: %v", name, err)
-			continue
-		}
-		if existing != nil {
+		if len(u.Secret) < minSeedSecret {
+			log.Printf("seed: skipping %q: secret shorter than %d characters (a placeholder? use `nft-okboy gen-secret`)", name, minSeedSecret)
 			continue
 		}
 		if _, err := d.CreateUser(name, u.Secret, false); err != nil {
@@ -184,7 +215,7 @@ func fmtKnock(ts *int64) string {
 func CmdServe(cfgPath, version string, args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	debug := fs.Bool("debug", false, "Enable debug logging")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
@@ -238,7 +269,7 @@ func CmdServe(cfgPath, version string, args []string) error {
 // cmd_gen_secret. The username positional is optional.
 func CmdGenSecret(args []string) error {
 	fs := flag.NewFlagSet("gen-secret", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	username := "<username>"
@@ -270,7 +301,7 @@ func CmdGenSecret(args []string) error {
 func CmdUserAdd(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("user-add", flag.ContinueOnError)
 	admin := fs.Bool("admin", false, "Grant admin privileges")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
@@ -303,7 +334,7 @@ func CmdUserAdd(cfgPath string, args []string) error {
 // (ports cmd_user_del). A missing user is reported, not fatal.
 func CmdUserDel(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("user-del", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
@@ -350,7 +381,7 @@ func CmdUserDel(cfgPath string, args []string) error {
 // current IP, last knock.
 func CmdUserList(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("user-list", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	_, d, err := loadCfgDB(cfgPath)
@@ -389,7 +420,7 @@ func CmdUserList(cfgPath string, args []string) error {
 func CmdGroupAdd(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("group-add", flag.ContinueOnError)
 	proto := fs.String("proto", "tcp", "Protocol (default: tcp)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 2 {
@@ -433,7 +464,7 @@ func CmdGroupAdd(cfgPath string, args []string) error {
 // members (ports cmd_group_del).
 func CmdGroupDel(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("group-del", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
@@ -482,7 +513,7 @@ func CmdGroupDel(cfgPath string, args []string) error {
 // CmdGroupList prints the group table (ports cmd_group_list): id, name, port, proto.
 func CmdGroupList(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("group-list", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	_, d, err := loadCfgDB(cfgPath)
@@ -514,7 +545,7 @@ func CmdGroupList(cfgPath string, args []string) error {
 // online (ports cmd_user_join). Membership is created enabled.
 func CmdUserJoin(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("user-join", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 2 {
@@ -563,7 +594,7 @@ func CmdUserJoin(cfgPath string, args []string) error {
 // user is online (ports cmd_user_leave).
 func CmdUserLeave(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("user-leave", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 2 {
@@ -615,7 +646,7 @@ func CmdUserLeave(cfgPath string, args []string) error {
 // CmdAdminAdd grants admin privileges to an existing user (ports cmd_admin_add).
 func CmdAdminAdd(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("admin-add", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
@@ -655,7 +686,7 @@ func CmdAdminAdd(cfgPath string, args []string) error {
 func CmdRevoke(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("revoke", flag.ContinueOnError)
 	noRotate := fs.Bool("no-rotate", false, "Disconnect without rotating the secret")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
@@ -719,7 +750,7 @@ func CmdRevoke(cfgPath string, args []string) error {
 // ===" section of cmd_list) via fw.ListManaged().
 func CmdList(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	cfg, d, err := loadCfgDB(cfgPath)
@@ -757,7 +788,7 @@ func CmdList(cfgPath string, args []string) error {
 func CmdCleanup(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
 	maxAge := fs.Int("max-age", 7, "Max age in days before a rule is considered stale (default: 7)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	cfg, d, err := loadCfgDB(cfgPath)
@@ -796,7 +827,7 @@ func CmdCleanup(cfgPath string, args []string) error {
 func CmdBackup(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("backup", flag.ContinueOnError)
 	dir := fs.String("dir", "", "Backup directory (default: config backup_dir)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	cfg, d, err := loadCfgDB(cfgPath)
@@ -809,7 +840,7 @@ func CmdBackup(cfgPath string, args []string) error {
 	if backupDir == "" {
 		backupDir = cfg.BackupDir
 	}
-	if err := os.MkdirAll(backupDir, 0o755); err != nil {
+	if err := os.MkdirAll(backupDir, 0o700); err != nil {
 		return fmt.Errorf("create backup dir %q: %w", backupDir, err)
 	}
 	stamp := time.Now().Format("20060102-150405.000000")
@@ -829,13 +860,18 @@ func CmdBackup(cfgPath string, args []string) error {
 
 // pruneBackups enforces rolling retention: keep the newest `keep` nft-okboy-*.db
 // backups (and their .sha256 sidecars), removing the rest. keep <= 0 disables
-// pruning, matching the Python guard.
+// pruning (matching the Python guard), not the owner-only fix-up of old backups.
 func pruneBackups(dir string, keep int) {
-	if keep <= 0 {
+	matches, err := filepath.Glob(filepath.Join(dir, "nft-okboy-*.db"))
+	if err != nil {
 		return
 	}
-	matches, err := filepath.Glob(filepath.Join(dir, "nft-okboy-*.db"))
-	if err != nil || len(matches) <= keep {
+	// Backups written by older versions may be world-readable; they hold the same
+	// plaintext secrets as the DB. Tighten them all, pruned or not.
+	for _, m := range matches {
+		_ = os.Chmod(m, 0o600)
+	}
+	if keep <= 0 || len(matches) <= keep {
 		return
 	}
 	sort.Strings(matches) // timestamped names sort chronologically
@@ -856,7 +892,7 @@ func pruneBackups(dir string, keep int) {
 // the user is missing or has no secret enrolled.
 func CmdTOTPURI(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("totp-uri", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {

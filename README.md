@@ -109,8 +109,12 @@ curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deplo
 
 > 国内网络慢可走镜像（脚本下载二进制时也会自动镜像兜底）：
 > `curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deploy/install.sh | sudo sh`
+>
+> 注意：经镜像拿到的脚本，等于完全信任该镜像。脚本自己只让**二进制**走镜像，校验和、配置和 systemd unit 一律直连 GitHub 取；
+> 连不上 GitHub 时会中止，可用 `NFT_OKBOY_SHA256=<发布页上该文件的 sha256>` 手动提供校验和，
+> 或用 `NFT_OKBOY_GH_MIRROR=https://ghfast.top/` 指定一个你信任的镜像兜底。
 
-脚本自动：按架构下载二进制（sha256 校验）→ 写入 `/etc/nft-okboy/config.yaml`（默认值即生产可用）→ 安装并启用 systemd 服务 → **创建 admin 并在结尾高亮打印一次性密钥**。重复运行即刷新二进制（配置/数据库保留）。
+脚本自动：按架构下载二进制（以 GitHub 公布的 sha256 校验，拿不到或对不上就中止）→ 写入 `/etc/nft-okboy/config.yaml`（默认值即生产可用）→ 安装并启用 systemd 服务 → **创建 admin 并在结尾高亮打印一次性密钥**。重复运行即刷新二进制（配置/数据库保留）。
 
 装完开第一个组并授权，然后浏览器打开 Web 管理台，输入用户名 + 密钥 → **Connect**：
 
@@ -122,7 +126,7 @@ nft-okboy user-join admin ssh    # 授权 admin 使用该组
 ### 升级
 
 ```bash
-sudo nft-okboy upgrade           # 自更新到最新 release（备份 DB → 校验 → 重启 → 失败回滚）
+sudo nft-okboy upgrade           # 自更新到最新 release（取 GitHub 公布的 sha256 → 备份 DB → 下载并校验 → 重启 → 失败回滚）
 sudo nft-okboy upgrade --check   # 只检查不安装
 ```
 

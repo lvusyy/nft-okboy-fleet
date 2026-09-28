@@ -1,9 +1,51 @@
 package db
 
 import (
+	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+// TestSecretsAreOwnerOnly: the DB and its backups hold plaintext HMAC secrets
+// and TOTP seeds, so they end up 0600 — even a DB file that already existed
+// world-readable — and new directories 0700.
+func TestSecretsAreOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permissions")
+	}
+	dir := filepath.Join(t.TempDir(), "data")
+	path := filepath.Join(dir, "t.db")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Init(); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+	if err := os.Chmod(path, 0o644); err != nil { // e.g. created by an older version
+		t.Fatal(err)
+	}
+	d, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	backup := filepath.Join(t.TempDir(), "bk", "b.db")
+	if _, err := d.Backup(backup); err != nil {
+		t.Fatal(err)
+	}
+	for f, want := range map[string]os.FileMode{dir: 0o700, path: 0o600, filepath.Dir(backup): 0o700, backup: 0o600} {
+		st, err := os.Stat(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := st.Mode().Perm(); got != want {
+			t.Errorf("%s: mode %o, want %o", f, got, want)
+		}
+	}
+}
 
 func tempDB(t *testing.T) *DB {
 	t.Helper()

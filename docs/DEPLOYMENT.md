@@ -23,7 +23,7 @@ nft-okboy 是**一个二进制**，可按需运行三种模式，并搭配三种
 curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deploy/install.sh | sudo sh
 ```
 
-脚本：按架构下载静态二进制（sha256 校验）→ 写 `/etc/nft-okboy/config.yaml` → 装并启用 systemd
+脚本：按架构下载静态二进制（以 GitHub 公布的 sha256 校验，拿不到或对不上就中止）→ 写 `/etc/nft-okboy/config.yaml` → 装并启用 systemd
 → 建 admin 并打印一次性密钥。然后：
 
 ```bash
@@ -102,7 +102,7 @@ rule_prefix: nft-okboy
 agent_allowed_ports: [18080]    # 安全护栏：本节点只允许开这些端口（见下）
 YAML
 
-# hub 地址 / 节点名 / token（0600，token 不进 unit、不入日志）
+# hub 地址 / 节点名 / token（0600；token 经环境变量传给 agent，不进 unit、不入日志，也不出现在 ps 能看到的进程参数里）
 sudo install -Dm600 /dev/stdin /etc/nft-okboy/agent.env <<'ENV'
 NFT_OKBOY_HUB=https://hub.example.com/
 NFT_OKBOY_NODE=edge-1
@@ -112,7 +112,12 @@ ENV
 sudo systemctl enable --now nft-okboy-agent
 ```
 
-> hub 用**自签证书**时，给 agent 加 `--insecure`（编辑 unit 的 `ExecStart`），或把 hub 的 CA 分发到节点。
+> hub 用**自签证书**时，把 hub 的证书（或签发它的 CA）拷到节点，例如 `/etc/nft-okboy/hub.pem`，给 agent 加
+> `--ca /etc/nft-okboy/hub.pem`（编辑 unit 的 `ExecStart`）。不要用 `--insecure`：它不校验证书，
+> 同一网络路径上的任何人都能冒充 hub、偷走节点 token、给节点下发规则。
+>
+> agent 只接受 `https://` 的 hub（本机回环地址除外）；hub 在可信的内网（如集群内部 Service）且只能走明文 http 时，
+> 需显式加 `--allow-http`（或在 agent.env 里写 `NFT_OKBOY_ALLOW_HTTP=1`，不用改 unit）。
 
 ### 4) 客户端 knock（一次覆盖全队列）
 
@@ -130,7 +135,7 @@ agent_allowed_ports: [18080, 443]
 ```
 ```bash
 # 或 CLI 覆盖：
-nft-okboy agent --hub ... --token ... --allow-ports 18080,443
+NFT_OKBOY_TOKEN=... nft-okboy agent --hub ... --allow-ports 18080,443
 ```
 
 ### 📊 Fleet 观测
@@ -215,9 +220,11 @@ spec:
       containers:
       - name: agent
         image: registry.example.com/nft-okboy:latest
+        # token 由下面的 NFT_OKBOY_TOKEN 环境变量提供，不放进 args（args 在节点上 ps 可见）；
+        # hub 走集群内网的明文 http，所以要显式加 --allow-http。
         args: ["-c","/etc/nft-okboy/agent.yaml","agent",
                "--hub","http://nft-okboy-hub:5000","--node","edge1",
-               "--token","$(NFT_OKBOY_TOKEN)","--allow-ports","18080"]
+               "--allow-http","--allow-ports","18080"]
         env:
         - name: NFT_OKBOY_TOKEN
           valueFrom: { secretKeyRef: { name: nft-okboy-edge1-token, key: token } }
