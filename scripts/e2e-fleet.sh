@@ -106,7 +106,9 @@ knock() {
 }
 
 knock 203.0.113.50
-"$BIN" -c "$WORK/agent.yaml" agent --hub http://127.0.0.1:5000 --node edge-1 --token "$TOKEN" --interval 2 >"$WORK/agent.log" 2>&1 &
+# --state under $WORK: the default path would overwrite a real agent's guard state on this host.
+"$BIN" -c "$WORK/agent.yaml" agent --hub http://127.0.0.1:5000 --node edge-1 --token "$TOKEN" --interval 2 \
+	--state "$WORK/agent-guard.json" >"$WORK/agent.log" 2>&1 &
 AGENTPID=$!
 sleep 5
 
