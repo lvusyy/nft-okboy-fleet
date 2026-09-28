@@ -10,8 +10,9 @@ GO      ?= go
 build:
 	$(GO) build -ldflags '$(LDFLAGS)' -o bin/$(BIN) ./cmd/nft-okboy
 
-# Single static linux/amd64 binary. CGO_ENABLED=0 forces the pure-Go
-# modernc.org/sqlite driver → no libc dependency, drops onto any Linux host.
+# Single static linux/amd64 binary. CGO_ENABLED=0 builds without cgo, so the
+# binary is statically linked with no libc dependency and drops onto any Linux
+# host (SQLite comes from the pure-Go modernc.org/sqlite driver either way).
 static:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$(DIST)-linux-amd64 ./cmd/nft-okboy
 
