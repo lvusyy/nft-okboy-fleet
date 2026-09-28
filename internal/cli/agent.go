@@ -32,6 +32,7 @@ func CmdAgent(cfgPath, version string, args []string) error {
 	caFile := fs.String("ca", "", "PEM file to trust for the hub certificate: its CA, or the self-signed certificate itself")
 	insecure := fs.Bool("insecure", false, "Skip TLS verification of the hub (anyone on the path can pose as the hub; prefer --ca)")
 	allowHTTP := fs.Bool("allow-http", false, "Accept a plain-http hub on a non-loopback address (e.g. a hub Service inside a trusted cluster network)")
+	stateFile := fs.String("state", "/var/lib/nft-okboy/agent-guard.json", "File that keeps the last nftables guard, so it is restored at once after a reboot (\"\" = off)")
 	allowPorts := fs.String("allow-ports", "", "Comma-separated ports this agent may open (overrides config agent_allowed_ports)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
@@ -75,6 +76,7 @@ func CmdAgent(cfgPath, version string, args []string) error {
 	if err != nil {
 		return fmt.Errorf("firewall backend init failed: %w", err)
 	}
+	warnFirewall(cfg, be)
 
 	// The --allow-ports flag overrides agent_allowed_ports from the config.
 	allowed := cfg.AgentAllowedPorts
@@ -103,6 +105,8 @@ func CmdAgent(cfgPath, version string, args []string) error {
 		Insecure:     *insecure,
 		RootCAs:      roots,
 		AllowedPorts: allowed,
+		Guard:        cfg.NftGuard,
+		StateFile:    *stateFile,
 		Version:      version,
 		Backend:      cfg.FirewallBackend,
 	})

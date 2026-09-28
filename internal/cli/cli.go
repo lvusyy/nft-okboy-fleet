@@ -248,9 +248,20 @@ func CmdServe(cfgPath, version string, args []string) error {
 		return fmt.Errorf("firewall EnsureBase failed (cannot manage nftables): %w", err)
 	}
 	fw := firewall.NewManager(be, d, cfg.RulePrefix)
+	warnFirewall(cfg, be)
 
 	srv := server.NewServer(d, fw, cfg)
 	srv.SetVersion(version)
+	// Bring the firewall in line with the DB (guard, drift, idle users) now and
+	// then periodically — see server.Maintain.
+	srv.Maintain()
+	go func() {
+		t := time.NewTicker(server.MaintainEvery)
+		defer t.Stop()
+		for range t.C {
+			srv.Maintain()
+		}
+	}()
 
 	addr := fmt.Sprintf("%s:%d", cfg.ListenHost, cfg.ListenPort)
 	httpSrv := &http.Server{Addr: addr, Handler: srv.Routes()}
@@ -259,6 +270,23 @@ func CmdServe(cfgPath, version string, args []string) error {
 		return fmt.Errorf("server error: %w", err)
 	}
 	return nil
+}
+
+// warnFirewall logs, at startup, what keeps the nftables backend from actually
+// enforcing the allowlist: a disabled guard, and other firewalls that may drop a
+// managed port after nft-okboy has accepted it.
+func warnFirewall(cfg *config.Config, be firewall.FirewallBackend) {
+	if cfg.FirewallBackend != "nftables" {
+		return
+	}
+	if !cfg.NftGuard {
+		log.Printf("WARNING: nft_guard is false: the nftables backend only adds accept rules, which restrict nothing — managed ports stay open to everyone")
+	}
+	if c, ok := be.(interface{ Conflicts() []string }); ok {
+		for _, f := range c.Conflicts() {
+			log.Printf("NOTE: %s", f)
+		}
+	}
 }
 
 // ====================================================================== //
@@ -436,6 +464,9 @@ func CmdGroupAdd(cfgPath string, args []string) error {
 	}
 	if !firewall.ValidName(name) {
 		return fmt.Errorf("invalid group name %q (allowed: alphanumeric start, then [A-Za-z0-9_-], max 64)", name)
+	}
+	if *proto != "tcp" && *proto != "udp" {
+		return fmt.Errorf("proto must be tcp or udp, got %q", *proto)
 	}
 
 	_, d, err := loadCfgDB(cfgPath)

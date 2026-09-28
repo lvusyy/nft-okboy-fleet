@@ -50,6 +50,14 @@ type Config struct {
 	NftTable    string `yaml:"nft_table"`
 	NftChain    string `yaml:"nft_chain"`
 	NftPriority int    `yaml:"nft_priority"`
+	// NftGuard closes each managed port to everyone the allow rules do not admit
+	// (new connections only). Without it the nftables backend restricts nothing;
+	// false exists only to restore the old accept-only behaviour.
+	NftGuard bool `yaml:"nft_guard"`
+
+	// CleanupMaxAgeDays: the server drops the allowlist entry (and so the rules on
+	// every node) of a user who has not knocked for this many days. 0 = never.
+	CleanupMaxAgeDays int `yaml:"cleanup_max_age_days"`
 
 	// Agent-side guard: the agent only opens these ports, refusing any desired
 	// rule from the hub on another port (defense in depth if the hub is
@@ -87,6 +95,8 @@ func Load(path string) (*Config, error) {
 		NftTable:             "nft_okboy",
 		NftChain:             "input",
 		NftPriority:          -150,
+		NftGuard:             true,
+		CleanupMaxAgeDays:    7,
 	}
 
 	data, err := os.ReadFile(path)

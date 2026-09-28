@@ -40,9 +40,21 @@ seamlessly — no rule sprawl, a full audit trail, zero standing exposure.
 - **Atomic, idempotent reconcile** on every knock — the firewall is made to match
   the database *exactly* (add missing, drop stale / old-IP / disabled-group rules),
   so it self-heals from races, crashes, and concurrent membership changes.
+- **Actually restricts** — each managed port (a group's port) is closed to every
+  source that is not allowlisted: new TCP connections are dropped (established
+  sessions survive), UDP datagrams are dropped, loopback is never filtered. Ports
+  it does not manage are left alone. Ports that Docker (`-p`) or Kubernetes
+  (NodePort) DNAT elsewhere never reach the `input` hook — nft-okboy can neither
+  guard nor allowlist them, so do not make one a group port.
 - **Coexists with Kubernetes / host firewalls** — its own table, hook `input` at
-  priority -150, **policy accept with accept-only rules**: it can only *widen*
-  access for named IP/port pairs, never drops, and never flushes anyone else's rules.
+  priority -150, never flushes anyone else's rules. But an nftables accept in one
+  chain is **not final**: if another firewall on the host (ufw, firewalld, an
+  nftables.conf) drops a managed port, allowlisted clients stay blocked — open the
+  port there (nft-okboy then does the restricting), or on a ufw host use
+  `firewall_backend: ufw`. Other firewalls found are logged at startup.
+- **Self-healing and expiry** — every 30 s the server re-asserts the firewall from
+  the database (a flushed table comes back, rules orphaned by failed deletes go);
+  users who have not knocked for 7 days leave the allowlist (`cleanup_max_age_days`).
 - **Precise, injection-safe writes** — every change is a JSON transaction piped to
   `nft -j -f -` (no shell, no argv interpolation), deleted by stable rule handle.
 
@@ -88,7 +100,7 @@ Nginx (TLS termination, passes X-Real-IP)
 nft-okboy (Go: HTTP API + CLI + auth + throttle)
     │  nft -j -f -   (JSON transaction, no shell)
     ▼
-nftables (dedicated `inet nft_okboy` table — accept-only, coexists with k8s/host)
+nftables (dedicated `inet nft_okboy` table — allowlist accepts + guard on managed ports, coexists with k8s/host)
     │
     ▼
 SQLite (pure-Go modernc; users / groups / membership / audit)
@@ -140,7 +152,9 @@ or name a mirror you trust as much as GitHub with `NFT_OKBOY_GH_MIRROR=<prefix>`
 Open your first group, authorize the admin, then open the Web console and Connect:
 
 ```bash
-nft-okboy group-add ssh 22       # manage port 22 as the "ssh" group
+nft-okboy group-add ssh 22       # manage port 22 as the "ssh" group (from now on 22 admits only
+                                 # IPs that knocked: keep this SSH session until, after knocking,
+                                 # a second SSH login works)
 nft-okboy user-join admin ssh    # authorize admin for it
 ```
 
@@ -215,7 +229,9 @@ throttle_max_failures: 10               # per-IP, 0 disables
 require_admin_totp: false               # force admin 2FA
 totp_replay_protection: true
 nft_table: nft-okboy                        # dedicated inet table
-nft_priority: -150                      # accept-only, coexists with k8s
+nft_priority: -150                      # coexists with k8s
+nft_guard: true                         # close managed ports to non-allowlisted sources (false = old accept-only, restricts nothing)
+cleanup_max_age_days: 7                 # days without a knock before a user leaves the allowlist; 0 = never
 db_path: /var/lib/nft-okboy/nft-okboy.db
 # users:                                # optional first-run seed
 #   admin: { secret: "<64 hex chars>" }

@@ -5,8 +5,12 @@ import (
 	"sync"
 )
 
-// Compile-time guarantee the mock stays a complete FirewallBackend.
-var _ FirewallBackend = (*MockBackend)(nil)
+// Compile-time guarantee the mock stays a complete FirewallBackend (with a Guard,
+// like the nftables backend it stands in for).
+var (
+	_ FirewallBackend = (*MockBackend)(nil)
+	_ Guard           = (*MockBackend)(nil)
+)
 
 // MockBackend is an in-memory FirewallBackend for unit tests on hosts without
 // nftables (i.e. every non-Linux dev box). It reproduces the EXACT semantics the
@@ -19,6 +23,18 @@ type MockBackend struct {
 	next   int64    // monotonically increasing handle counter
 	rules  []Rule   // the live rule set
 	Calls  []string // ordered op log (e.g. "AddRule web 1.2.3.4:8080/tcp") — test introspection
+	// Guarded is the port set of the last SyncGuard (nil = no guard).
+	Guarded []PortProto
+}
+
+// SyncGuard records the guarded ports (the real nft guard is covered by the
+// integration and traffic tests).
+func (m *MockBackend) SyncGuard(ports []PortProto) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.Guarded = append([]PortProto(nil), ports...)
+	m.Calls = append(m.Calls, "SyncGuard")
+	return nil
 }
 
 // NewMockBackend returns an empty in-memory backend keyed to prefix.

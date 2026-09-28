@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 )
@@ -23,13 +25,25 @@ type NftConfig struct {
 	Priority int    // hook priority (negative = earlier; -150 sits before most)
 }
 
-// Compile-time guarantee NftBackend stays a complete FirewallBackend.
-var _ FirewallBackend = (*NftBackend)(nil)
+// Compile-time guarantee NftBackend stays a complete FirewallBackend with a Guard.
+var (
+	_ FirewallBackend = (*NftBackend)(nil)
+	_ Guard           = (*NftBackend)(nil)
+)
 
 // NftBackend mutates real nftables by shelling out to `nft` with its JSON
-// program format. It owns a dedicated `inet` table+chain whose policy is ACCEPT
-// and which only ever appends accept rules — so it coexists with k8s/host
-// firewalls in their own tables and NEVER drops traffic of its own accord.
+// program format. It owns a dedicated `inet` table and one base chain (hook
+// input, policy accept) holding, in this order:
+//
+//	ip saddr 203.0.113.7 tcp dport 22 accept     — allow rules (AddRule inserts at the head)
+//	iif "lo" accept                             — guard: loopback is never filtered
+//	tcp dport 22 tcp flags syn / syn,ack drop   — guard: one per managed port/proto
+//
+// The guard (SyncGuard) is what makes it an allowlist: accept rules alone
+// restrict nothing, because the chain policy accepts whatever they do not match.
+// Traffic to ports it does not manage passes untouched, so the table coexists
+// with k8s/host firewalls in their own tables — but an accept here is not final:
+// a later base chain can still drop the packet (see Conflicts).
 //
 // Injection safety: writes are built as Go structs, json.Marshal'd, and piped to
 // `nft -j -f -` on STDIN. User data is never concatenated into a shell string or
@@ -124,8 +138,9 @@ func (n *NftBackend) runJSONRead(args ...string) ([]byte, error) {
 // EnsureBase idempotently creates the inet table and the base chain (hook input,
 // policy accept) in one transaction. `add` is idempotent in nftables — re-adding
 // an existing table/chain with the same spec is a no-op — so this is safe to call
-// on every startup. Policy ACCEPT + accept-only rules means this table can never
-// black-hole traffic that other tables would have allowed.
+// on every startup and periodically (to recreate them after the ruleset was
+// flushed, e.g. by `systemctl restart nftables`). With policy accept, the only
+// traffic this table ever drops is new connections to guarded ports.
 func (n *NftBackend) EnsureBase() error {
 	prog := nftProgram{Nftables: []any{
 		map[string]any{
@@ -157,8 +172,10 @@ func (n *NftBackend) EnsureBase() error {
 //  Writes
 // ------------------------------------------------------------------ //
 
-// AddRule appends an accept rule matching `ip saddr <ip>` (ip6 for v6) and
-// `<proto> dport <port>`, carrying the comment "<prefix>:<user>:<group>".
+// AddRule inserts an accept rule matching `ip saddr <ip>` (ip6 for v6) and
+// `<proto> dport <port>`, carrying the comment "<prefix>:<user>:<group>". It is
+// INSERTED at the head of the chain, never appended: it must come before the
+// guard's drop rules at the tail, or it would never be reached.
 func (n *NftBackend) AddRule(ip string, port int, user, proto, group string) error {
 	if err := checkRule(ip, port, proto); err != nil {
 		return err
@@ -174,9 +191,224 @@ func (n *NftBackend) AddRule(ip string, port int, user, proto, group string) err
 		"expr":    expr,
 	}
 	prog := nftProgram{Nftables: []any{
-		map[string]any{"add": map[string]any{"rule": rule}},
+		map[string]any{"insert": map[string]any{"rule": rule}},
 	}}
 	return n.runJSON(prog)
+}
+
+// ------------------------------------------------------------------ //
+//  Guard
+// ------------------------------------------------------------------ //
+
+// guardComment tags the guard's rules. It deliberately does not start with
+// "<prefix>:", so ListManaged / ListUserRules never mistake them for allow rules.
+func (n *NftBackend) guardComment() string { return n.cfg.Prefix + "-guard" }
+
+// SyncGuard keeps the guard at the tail of the chain, after every allow rule:
+//
+//	iif "lo" accept                            — local traffic is never guarded
+//	tcp dport 22 tcp flags syn / syn,ack drop  — one per port/proto in ports
+//	udp dport 53 drop
+//
+// For TCP only connection attempts (SYN without ACK) are dropped, so established
+// sessions — the operator's own SSH included — survive a guard change or a
+// removed allow rule, as under ufw. Matching the SYN flag rather than conntrack
+// state needs no nft_ct module (not loaded, and not autoloadable, on some hosts).
+// UDP has no handshake: every datagram from a source no allow rule admitted is
+// dropped. An empty ports removes the guard. It is a no-op when the tail already
+// matches; otherwise the old guard rules are deleted and the new ones appended in
+// ONE nft transaction, so there is never a moment without a guard.
+func (n *NftBackend) SyncGuard(ports []PortProto) error {
+	want := guardLayout(ports)
+	chain, err := n.listChain()
+	if err != nil {
+		return err
+	}
+	var guard []Rule
+	for _, r := range chain {
+		if r.Comment == n.guardComment() {
+			guard = append(guard, r)
+		}
+	}
+	if guardAtTail(chain, guard, want) {
+		return nil
+	}
+	if !sameGuard(guard, want) { // not just moved back to the tail: say what changed
+		log.Printf("nftables guard: %s", describeGuard(want))
+	}
+	var cmds []any
+	for _, g := range guard {
+		cmds = append(cmds, map[string]any{"delete": map[string]any{"rule": map[string]any{
+			"family": "inet", "table": n.cfg.Table, "chain": n.cfg.Chain, "handle": g.Handle,
+		}}})
+	}
+	for _, p := range want {
+		cmds = append(cmds, map[string]any{"add": map[string]any{"rule": n.guardRule(p)}})
+	}
+	return n.runJSON(nftProgram{Nftables: cmds})
+}
+
+// guardLayout is the ordered guard for ports: the loopback bypass (Port 0) first,
+// then one drop per distinct valid port/proto, sorted; nil when there is nothing
+// to guard.
+func guardLayout(ports []PortProto) []PortProto {
+	seen := map[PortProto]bool{}
+	var drops []PortProto
+	for _, p := range ports {
+		if p.Port < 1 || p.Port > 65535 || (p.Proto != "tcp" && p.Proto != "udp") || seen[p] {
+			continue
+		}
+		seen[p] = true
+		drops = append(drops, p)
+	}
+	if len(drops) == 0 {
+		return nil
+	}
+	sort.Slice(drops, func(i, j int) bool {
+		if drops[i].Port != drops[j].Port {
+			return drops[i].Port < drops[j].Port
+		}
+		return drops[i].Proto < drops[j].Proto
+	})
+	return append([]PortProto{{}}, drops...)
+}
+
+// sameGuard reports whether the guard rules cover exactly want (wherever they are).
+func sameGuard(guard []Rule, want []PortProto) bool {
+	if len(guard) != len(want) {
+		return false
+	}
+	for i, r := range guard {
+		if r.Port != want[i].Port || r.Proto != want[i].Proto {
+			return false
+		}
+	}
+	return true
+}
+
+// describeGuard says, for the log, which ports the guard (as laid out by
+// guardLayout) closes.
+func describeGuard(want []PortProto) string {
+	if len(want) == 0 {
+		return "removed — no port is closed to sources that have not knocked"
+	}
+	ps := make([]string, 0, len(want)-1)
+	for _, p := range want[1:] { // want[0] is the loopback bypass
+		ps = append(ps, fmt.Sprintf("%d/%s", p.Port, p.Proto))
+	}
+	return "new connections to " + strings.Join(ps, ", ") + " are dropped unless their source knocked"
+}
+
+// guardAtTail reports whether the guard rules are exactly want, in order, as the
+// last rules of the chain (nothing — no allow rule — after or between them).
+func guardAtTail(chain, guard []Rule, want []PortProto) bool {
+	if len(guard) != len(want) {
+		return false
+	}
+	tail := chain[len(chain)-len(guard):]
+	for i, r := range tail {
+		if r.Handle != guard[i].Handle || r.Port != want[i].Port || r.Proto != want[i].Proto {
+			return false
+		}
+	}
+	return true
+}
+
+// guardRule builds one guard rule: the loopback bypass for the zero PortProto,
+// else a drop of new connections (TCP) or of all datagrams (UDP) to p.
+func (n *NftBackend) guardRule(p PortProto) map[string]any {
+	var expr []any
+	switch {
+	case p.Port == 0:
+		expr = []any{
+			map[string]any{"match": map[string]any{
+				"op": "==", "left": map[string]any{"meta": map[string]any{"key": "iif"}}, "right": "lo",
+			}},
+			map[string]any{"accept": nil},
+		}
+	default:
+		expr = []any{map[string]any{"match": map[string]any{
+			"op": "==", "left": map[string]any{"payload": map[string]any{"protocol": p.Proto, "field": "dport"}}, "right": p.Port,
+		}}}
+		if p.Proto == "tcp" { // tcp flags & (syn|ack) == syn: a connection attempt
+			expr = append(expr, map[string]any{"match": map[string]any{
+				"op": "==",
+				"left": map[string]any{"&": []any{
+					map[string]any{"payload": map[string]any{"protocol": "tcp", "field": "flags"}},
+					[]any{"syn", "ack"},
+				}},
+				"right": "syn",
+			}})
+		}
+		expr = append(expr, map[string]any{"drop": nil})
+	}
+	return map[string]any{
+		"family": "inet", "table": n.cfg.Table, "chain": n.cfg.Chain,
+		"comment": n.guardComment(), "expr": expr,
+	}
+}
+
+// Conflicts explains, one finding per string, what else on this host decides
+// whether a managed port is reachable:
+//   - other firewalls filtering incoming traffic: every other base chain on the
+//     input hook (ufw on iptables-nft, firewalld, a host nftables.conf …) and an
+//     active ufw, which nft cannot see when it runs on legacy iptables.
+//     nft-okboy's accept is not final, so if one of them drops a managed port,
+//     allowlisted clients stay blocked until it opens the port;
+//   - nat chains on the prerouting hook (Docker, kube-proxy): a port they DNAT is
+//     forwarded, not delivered to this host, so its traffic never reaches the
+//     input hook — nft-okboy neither guards nor allowlists it.
+func (n *NftBackend) Conflicts() []string {
+	var filters, nats []string
+	if out, err := n.runJSONRead("list", "chains"); err == nil && len(out) > 0 {
+		var doc struct {
+			Nftables []struct {
+				Chain *struct {
+					Family string `json:"family"`
+					Table  string `json:"table"`
+					Name   string `json:"name"`
+					Type   string `json:"type"`
+					Hook   string `json:"hook"`
+					Prio   any    `json:"prio"`
+					Policy string `json:"policy"`
+				} `json:"chain"`
+			} `json:"nftables"`
+		}
+		if json.Unmarshal(out, &doc) == nil {
+			for _, item := range doc.Nftables {
+				c := item.Chain
+				switch {
+				case c == nil || (c.Family == "inet" && c.Table == n.cfg.Table):
+				case c.Hook == "input":
+					filters = append(filters, fmt.Sprintf("nft chain %s %s %s (priority %v, policy %s)", c.Family, c.Table, c.Name, c.Prio, c.Policy))
+				case c.Hook == "prerouting" && c.Type == "nat":
+					nats = append(nats, fmt.Sprintf("%s %s %s", c.Family, c.Table, c.Name))
+				}
+			}
+		}
+	}
+	if path, err := exec.LookPath("ufw"); err == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), nftTimeout)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, path, "status")
+		cmd.Env = append(cmd.Environ(), "LANG=C", "LC_ALL=C")
+		if out, err := cmd.Output(); err == nil && strings.Contains(string(out), "Status: active") {
+			filters = append(filters, "ufw is active")
+		}
+	}
+	var found []string
+	if len(filters) > 0 {
+		found = append(found, "other firewalls also filter incoming traffic here: "+strings.Join(filters, "; ")+
+			". An accept in nft-okboy's chain is not final: if one of them drops a managed port, allowlisted clients stay blocked"+
+			" — allow the port there (nft-okboy's guard then does the restricting), or on a ufw host use firewall_backend: ufw.")
+	}
+	if len(nats) > 0 {
+		found = append(found, "nat chains on the prerouting hook ("+strings.Join(nats, "; ")+
+			") can forward ports elsewhere (Docker -p, Kubernetes NodePort): forwarded traffic never reaches the input hook,"+
+			" so nft-okboy neither guards nor allowlists such a port — do not make one a group port, or restrict it on the"+
+			" forward path (e.g. Docker's DOCKER-USER chain).")
+	}
+	return found
 }
 
 // RemoveRule lists the user's rules, finds the one whose ip/port/proto AND comment
@@ -263,10 +495,29 @@ func (n *NftBackend) ListManaged() ([]Rule, error) {
 	return n.listFiltered(n.cfg.Prefix + ":")
 }
 
-// listFiltered lists the base chain and keeps the rules whose comment has the
-// given prefix. Parsing is deliberately tolerant: a rule with an unexpected
-// shape is skipped rather than failing the whole list.
+// listFiltered keeps the chain's rules whose comment has the given prefix.
 func (n *NftBackend) listFiltered(commentPrefix string) ([]Rule, error) {
+	chain, err := n.listChain()
+	if err != nil {
+		return nil, err
+	}
+	var rules []Rule
+	for _, r := range chain {
+		if !strings.HasPrefix(r.Comment, commentPrefix) {
+			continue
+		}
+		// Recover user/group from the comment "<prefix>:<user>:<group>".
+		r.User, r.Group = splitComment(n.cfg.Prefix, r.Comment)
+		rules = append(rules, r)
+	}
+	return rules, nil
+}
+
+// listChain lists every rule of the base chain in chain order, with its handle,
+// comment and whatever ip/port/proto parseExpr recognises. Parsing is deliberately
+// tolerant: a rule with an unexpected shape is skipped rather than failing the
+// whole list.
+func (n *NftBackend) listChain() ([]Rule, error) {
 	out, err := n.runJSONRead("list", "chain", "inet", n.cfg.Table, n.cfg.Chain)
 	if err != nil {
 		return nil, err
@@ -290,13 +541,8 @@ func (n *NftBackend) listFiltered(commentPrefix string) ([]Rule, error) {
 		if err := json.Unmarshal(raw, &jr); err != nil {
 			continue // tolerant: skip malformed rule objects
 		}
-		if !strings.HasPrefix(jr.Comment, commentPrefix) {
-			continue
-		}
 		r := Rule{Handle: jr.Handle, Comment: jr.Comment}
 		parseExpr(jr.Expr, &r)
-		// Recover user/group from the comment "<prefix>:<user>:<group>".
-		r.User, r.Group = splitComment(n.cfg.Prefix, jr.Comment)
 		rules = append(rules, r)
 	}
 	return rules, nil

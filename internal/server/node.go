@@ -66,11 +66,24 @@ func (s *Server) nodeDesiredState(w http.ResponseWriter, r *http.Request) {
 			"comment": firewall.Comment(s.cfg.RulePrefix, d.User, d.Group),
 		})
 	}
+	// "ports" lists every port this node manages (its group targets), even when
+	// nobody is allowed in right now: an nftables agent closes exactly these to
+	// everyone its allow rules do not admit. Older agents ignore the field.
+	targets, err := s.db.NodeTargetPorts(node.ID)
+	if err != nil {
+		errJSON(w, http.StatusInternalServerError, "Internal error")
+		return
+	}
+	ports := make([]map[string]any, 0, len(targets))
+	for _, t := range targets {
+		ports = append(ports, map[string]any{"port": t.Port, "proto": t.Proto})
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":     true,
 		"node":   node.Name,
 		"prefix": s.cfg.RulePrefix,
 		"rules":  rules,
+		"ports":  ports,
 	})
 }
 

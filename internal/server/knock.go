@@ -34,15 +34,29 @@ func portMap(groups []db.Group) map[string]firewall.PortProto {
 	return m
 }
 
-// syncEnabled re-applies ALL of user's enabled groups at ip. Used after a group
-// is (re-)enabled: reconciling only the toggled group would remove the rules of
-// the user's other groups until their next knock.
-func (s *Server) syncEnabled(userID int64, username, ip string) {
-	groups, err := s.db.GetUserGroups(userID, true)
-	if err != nil {
-		return
+// setMembership enables or disables userID's membership of group and applies it
+// at the user's current IP, database and firewall together under fwMu (re-read
+// there, so a knock that moved the user meanwhile is not undone). Enabling
+// re-applies ALL of the user's enabled groups: reconciling only the toggled one
+// would remove the rules of their other groups until their next knock.
+func (s *Server) setMembership(userID int64, group *db.Group, enabled bool) error {
+	s.fwMu.Lock()
+	defer s.fwMu.Unlock()
+	if err := s.db.SetMembershipEnabled(userID, group.ID, enabled); err != nil {
+		return err
 	}
-	_, _, _ = s.fw.Reconcile(username, ip, portMap(groups))
+	u, err := s.db.GetUser(userID)
+	if err != nil || u == nil || u.CurrentIP == nil || *u.CurrentIP == "" {
+		return nil
+	}
+	if !enabled {
+		_ = s.fw.RemoveRule(*u.CurrentIP, group.Port, u.Username, group.Proto, group.Name)
+		return nil
+	}
+	if groups, err := s.db.GetUserGroups(userID, true); err == nil {
+		_, _, _ = s.fw.Reconcile(u.Username, *u.CurrentIP, portMap(groups))
+	}
+	return nil
 }
 
 // serveIndex serves the embedded single-file web client for "/" and "/static/...".
@@ -65,6 +79,13 @@ func (s *Server) serveIndex(w http.ResponseWriter, r *http.Request) {
 //  5. if unchanged → heartbeat; else targeted removal of the prior IP's rules per
 //     enabled group, an anomaly check (optional "warning"), then the updated body.
 func (s *Server) knock(w http.ResponseWriter, r *http.Request) {
+	// The whole knock runs under fwMu, authentication included: a revoke that
+	// rotates the secret either completes first (this signature then fails) or
+	// runs after it and removes what it added. Maintain must not reconcile in
+	// between either (it would restore the old IP's rules).
+	s.fwMu.Lock()
+	defer s.fwMu.Unlock()
+
 	username, ok := s.authUser(w, r)
 	if !ok {
 		return
@@ -322,19 +343,9 @@ func (s *Server) selfToggleMembership(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if e := s.db.SetMembershipEnabled(requester.ID, groupID, enabled); e != nil {
+	if e := s.setMembership(requester.ID, group, enabled); e != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
 		return
-	}
-
-	if requester.CurrentIP != nil && *requester.CurrentIP != "" {
-		ip := *requester.CurrentIP
-		if !enabled {
-			_ = s.fw.RemoveRule(ip, group.Port, requester.Username, group.Proto, group.Name)
-		} else {
-			// Idempotent add via reconcile: re-enabling an existing rule is a no-op.
-			s.syncEnabled(requester.ID, requester.Username, ip)
-		}
 	}
 
 	_ = s.db.LogAudit(username, "self_toggle_membership",
@@ -431,18 +442,9 @@ func (s *Server) toggleMembership(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if e := s.db.SetMembershipEnabled(userID, groupID, enabled); e != nil {
+	if e := s.setMembership(userID, group, enabled); e != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
 		return
-	}
-
-	if target.CurrentIP != nil && *target.CurrentIP != "" {
-		ip := *target.CurrentIP
-		if !enabled {
-			_ = s.fw.RemoveRule(ip, group.Port, target.Username, group.Proto, group.Name)
-		} else {
-			s.syncEnabled(target.ID, target.Username, ip)
-		}
 	}
 
 	_ = s.db.LogAudit(username, "toggle_membership",

@@ -26,6 +26,8 @@ type harness struct {
 	t   *testing.T
 	d   *db.DB
 	be  *firewall.MockBackend
+	cfg *config.Config
+	s   *Server
 	srv http.Handler
 }
 
@@ -43,9 +45,10 @@ func newHarness(t *testing.T) *harness {
 	cfg := &config.Config{
 		SignatureTTL: 300, TrustedProxies: []string{"127.0.0.1"}, RulePrefix: "nft-okboy",
 		ThrottleMaxFailures: 10, ThrottleWindow: 300, TOTPReplayProtection: true,
-		AnomalyWindow: 3600, AnomalyMaxChanges: 5,
+		AnomalyWindow: 3600, AnomalyMaxChanges: 5, NftGuard: true, CleanupMaxAgeDays: 7,
 	}
-	return &harness{t: t, d: d, be: be, srv: NewServer(d, firewall.NewManager(be, d, "nft-okboy"), cfg).Routes()}
+	s := NewServer(d, firewall.NewManager(be, d, "nft-okboy"), cfg)
+	return &harness{t: t, d: d, be: be, cfg: cfg, s: s, srv: s.Routes()}
 }
 
 func (h *harness) user(name string, admin bool) int64 {

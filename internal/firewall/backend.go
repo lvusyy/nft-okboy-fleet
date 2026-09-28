@@ -50,6 +50,19 @@ type FirewallBackend interface {
 	ListManaged() ([]Rule, error)
 }
 
+// Guard is implemented by a backend that must itself close its managed ports to
+// everyone its allow rules do not admit. nftables needs one: nft-okboy's table
+// is just one base chain on the input hook, so accept rules alone restrict
+// nothing — unmatched packets meet the chain's accept policy, and an accept is
+// not final anyway (a later base chain may still drop). ufw needs no guard: UFW's
+// default-deny already closes every port the allow rules leave shut.
+type Guard interface {
+	// SyncGuard makes the guard drop new connections to exactly ports (from any
+	// source no allow rule accepted; for UDP, every datagram); an empty ports
+	// removes the guard.
+	SyncGuard(ports []PortProto) error
+}
+
 // nameRe is the SR-1 charset allowlist for usernames and group names. These
 // strings flow into nftables rule comments and identifiers, so confining them to
 // a safe charset (no spaces, quotes, backslashes, ':', ';', '{', '}', '#',

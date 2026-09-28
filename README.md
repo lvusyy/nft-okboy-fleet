@@ -34,8 +34,15 @@ IP 就被自动注册进防火墙；规则整洁、可追溯、能自愈。**单
 - **IP 无缝切换**——新 IP 一注册，旧 IP 立刻移除。
 - **每次 knock 原子幂等 reconcile**——把防火墙调整到与数据库**完全一致**（补缺、删除
   旧 IP/失效组/残留规则），从竞态、崩溃、并发变更中自愈。
-- **与 Kubernetes / 主机防火墙共存**——独占表、`input` 钩子优先级 -150、**policy
-  accept 且只加 accept 规则**：只能为指定 IP/端口**放行**，永不 drop、永不 flush 别人的规则。
+- **真正拦截**——受管端口（各组的端口）对白名单以外的来源一律关闭：TCP 丢弃新连接（已建立的会话
+  不受影响），UDP 丢弃所有数据报；本机回环不受限。只管受管端口，别的端口原样不动。Docker（`-p`）、
+  Kubernetes（NodePort）经 DNAT 转发走的端口不经过 `input` 钩子，拦不住也放行不了，别配成组端口。
+- **与 Kubernetes / 主机防火墙共存**——独占表、`input` 钩子优先级 -150、永不 flush 别人的规则。
+  但 nftables 里一条链的放行**不是最终结论**：主机上另有防火墙（ufw、firewalld、nftables.conf）
+  拦了受管端口时，白名单用户照样进不来——要么在那边放开该端口（由 nft-okboy 负责筛选），要么
+  在 ufw 主机上改用 `firewall_backend: ufw`。启动时会把检测到的其他防火墙写进日志。
+- **自愈与过期**——服务端每 30 秒按数据库重建：表被清空（如重启 nftables）会恢复，删除失败留下的
+  规则会被清掉；7 天没敲门的用户自动移出白名单（`cleanup_max_age_days`）。
 - **精确、防注入写入**——每次变更都是 JSON 事务经 `nft -j -f -` 写入（无 shell、无 argv
   拼接），按稳定的规则 handle 删除。
 
@@ -73,7 +80,7 @@ Nginx（TLS 终止，传 X-Real-IP）
 nft-okboy（Go：HTTP API + CLI + 鉴权 + 限流）
     │  nft -j -f -   （JSON 事务，无 shell）
     ▼
-nftables（专用 inet nft_okboy 表 —— 仅 accept，与 k8s/host 共存）
+nftables（专用 inet nft_okboy 表 —— 白名单放行 + 受管端口其余拒绝，与 k8s/host 共存）
     │
     ▼
 SQLite（纯 Go modernc；用户 / 组 / 成员 / 审计）
@@ -119,7 +126,8 @@ curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deplo
 装完开第一个组并授权，然后浏览器打开 Web 管理台，输入用户名 + 密钥 → **Connect**：
 
 ```bash
-nft-okboy group-add ssh 22       # 把 22 端口纳管为 "ssh" 组
+nft-okboy group-add ssh 22       # 把 22 端口纳管为 "ssh" 组（从此 22 只放行敲过门的 IP：
+                                 # 敲门后另开一个 SSH 会话确认能登录，再断开当前会话）
 nft-okboy user-join admin ssh    # 授权 admin 使用该组
 ```
 
@@ -167,7 +175,7 @@ systemctl enable --now nft-okboy-agent
 # ③ 客户端敲一次 hub —— 授权的所有节点自动放行（一次 knock 覆盖全队列）
 ```
 
-- **🛡 安全护栏**：`agent_allowed_ports: [18080]` —— 节点只开白名单端口，**hub 被攻破也开不了 SSH**。
+- **🛡 安全护栏**：`agent_allowed_ports: [18080]` —— 节点只开、也只关白名单端口，**hub 被攻破也开不了（关不掉）SSH**；nftables 节点的防护只覆盖这里列出的端口。
 - **📊 观测**：`nft-okboy node-list` 看各节点 online / version / backend / 规则数。
 - **⬆ 自升级**：启用 `nft-okboy-agent-upgrade.timer` 即可让 agent 每日自更新。
 
@@ -223,7 +231,9 @@ throttle_max_failures: 10               # 按 IP，0 关闭
 require_admin_totp: false               # 强制管理员 2FA
 totp_replay_protection: true
 nft_table: nft-okboy                        # 专用 inet 表
-nft_priority: -150                      # 仅 accept，与 k8s 共存
+nft_priority: -150                      # 与 k8s 共存
+nft_guard: true                         # 受管端口对白名单以外关闭（false = 旧行为：只放行、什么也拦不住）
+cleanup_max_age_days: 7                 # 多少天没敲门就移出白名单，0 不过期
 db_path: /var/lib/nft-okboy/nft-okboy.db
 # users:                                # 可选首次种子
 #   admin: { secret: "<64 位十六进制>" }

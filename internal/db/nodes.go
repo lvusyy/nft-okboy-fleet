@@ -150,6 +150,55 @@ func (d *DB) ListGroupTargets() ([]GroupTargetView, error) {
 	return out, rows.Err()
 }
 
+// NodeTargetPorts returns the (port, proto) of every group target on nodeID —
+// the ports the node manages, whether or not anyone is allowed in right now. An
+// nftables agent guards exactly these (closes them to everyone its allow rules
+// do not admit).
+func (d *DB) NodeTargetPorts(nodeID int64) ([]GroupPort, error) {
+	rows, err := d.sql.Query(`SELECT g.name, gt.port, gt.proto
+		FROM group_targets gt JOIN groups g ON g.id = gt.group_id
+		WHERE gt.node_id = ? ORDER BY gt.port, gt.proto`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []GroupPort
+	for rows.Next() {
+		var p GroupPort
+		if err := rows.Scan(&p.Group, &p.Port, &p.Proto); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// DesiredStateLocal is DesiredStateForNode for the hub's (or a standalone
+// server's) OWN firewall: one rule per user with a recorded IP and ENABLED group
+// membership, on the group's own port. Knocks apply these per user; the full set
+// lets a periodic reconcile repair what knocks cannot see — a flushed table, or
+// rules orphaned by a failed delete of a user who will never knock again.
+func (d *DB) DesiredStateLocal() ([]DesiredRule, error) {
+	rows, err := d.sql.Query(`SELECT u.current_ip, g.port, g.proto, u.username, g.name
+		FROM user_group_membership m
+		JOIN groups g ON g.id = m.group_id
+		JOIN users u ON u.id = m.user_id
+		WHERE m.enabled = 1 AND u.current_ip IS NOT NULL AND u.current_ip != ''`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []DesiredRule
+	for rows.Next() {
+		var r DesiredRule
+		if err := rows.Scan(&r.IP, &r.Port, &r.Proto, &r.User, &r.Group); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // DesiredStateForNode computes the allow rules an agent on nodeID must enforce:
 // for every user with a recorded IP and an ENABLED membership in a group that
 // targets this node, one rule (user.current_ip, target.port, target.proto) for

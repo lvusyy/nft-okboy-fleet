@@ -13,7 +13,9 @@
 package firewall
 
 import (
+	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 )
 
@@ -96,4 +98,99 @@ func TestNftIntegration(t *testing.T) {
 		t.Fatalf("ListManaged want 3, got %d: %+v", len(all), all)
 	}
 	t.Logf("real nftables validated: add/list(handle)/precise cross-group delete/ipv6/listmanaged — %d managed rules", len(all))
+}
+
+// TestNftIntegrationGuard: the guard sits at the chain's tail after every allow
+// rule (AddRule inserts at the head), is invisible to ListManaged, is left alone
+// when already right, is rebuilt when an allow rule ends up behind it, and goes
+// away with an empty port set.
+func TestNftIntegrationGuard(t *testing.T) {
+	const table = "okboy_guard_it"
+	be, err := NewNftBackend(NftConfig{Prefix: "nft-okboy", Table: table, Chain: "input", Priority: -150})
+	if err != nil {
+		t.Fatalf("NewNftBackend: %v", err)
+	}
+	delTable := func() { _ = exec.Command("nft", "delete", "table", "inet", table).Run() }
+	delTable()
+	t.Cleanup(delTable)
+	if err := be.EnsureBase(); err != nil {
+		t.Fatalf("EnsureBase: %v", err)
+	}
+	if err := be.AddRule("203.0.113.10", 22, "alice", "tcp", "ssh"); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+	ports := []PortProto{{22, "tcp"}, {53, "udp"}, {22, "tcp"}} // duplicate on purpose
+	if err := be.SyncGuard(ports); err != nil {
+		t.Fatalf("SyncGuard: %v", err)
+	}
+
+	// layout returns "allow" / "lo" / "<port>/<proto>" per rule in chain order.
+	layout := func() []string {
+		chain, err := be.listChain()
+		if err != nil {
+			t.Fatalf("listChain: %v", err)
+		}
+		var out []string
+		for _, r := range chain {
+			switch {
+			case strings.HasPrefix(r.Comment, "nft-okboy:"):
+				out = append(out, "allow")
+			case r.Comment == "nft-okboy-guard" && r.Port == 0:
+				out = append(out, "lo")
+			case r.Comment == "nft-okboy-guard":
+				out = append(out, fmt.Sprintf("%d/%s", r.Port, r.Proto))
+			default:
+				out = append(out, "?"+r.Comment)
+			}
+		}
+		return out
+	}
+	want := func(exp ...string) {
+		t.Helper()
+		if got := layout(); strings.Join(got, " ") != strings.Join(exp, " ") {
+			t.Fatalf("chain layout = %v, want %v", got, exp)
+		}
+	}
+	want("allow", "lo", "22/tcp", "53/udp")
+	if listing, _ := exec.Command("nft", "list", "chain", "inet", table, "input").Output(); !strings.Contains(string(listing), "tcp dport 22 tcp flags syn / syn,ack drop") || !strings.Contains(string(listing), `iif "lo" accept`) {
+		t.Fatalf("guard rules not as intended:\n%s", listing)
+	}
+	if managed, _ := be.ListManaged(); len(managed) != 1 {
+		t.Fatalf("guard rules must not show up as managed allow rules: %+v", managed)
+	}
+
+	// New allow rules go in front of the guard; an unchanged guard is not touched.
+	before, _ := be.listChain()
+	if err := be.AddRule("203.0.113.11", 53, "bob", "udp", "dns"); err != nil {
+		t.Fatalf("AddRule: %v", err)
+	}
+	if err := be.SyncGuard(ports); err != nil {
+		t.Fatalf("SyncGuard: %v", err)
+	}
+	want("allow", "allow", "lo", "22/tcp", "53/udp")
+	after, _ := be.listChain()
+	if before[len(before)-1].Handle != after[len(after)-1].Handle {
+		t.Fatal("an unchanged guard must not be rebuilt")
+	}
+
+	// An allow rule appended behind the guard (an older nft-okboy, a human) makes
+	// the guard rebuild at the tail again.
+	if out, err := exec.Command("nft", "add", "rule", "inet", table, "input", "ip", "saddr", "203.0.113.12",
+		"tcp", "dport", "8080", "accept", "comment", `"nft-okboy:eve:web"`).CombinedOutput(); err != nil {
+		t.Fatalf("append rule: %v: %s", err, out)
+	}
+	if err := be.SyncGuard(ports); err != nil {
+		t.Fatalf("SyncGuard: %v", err)
+	}
+	want("allow", "allow", "allow", "lo", "22/tcp", "53/udp")
+
+	// A changed port set and then an empty one.
+	if err := be.SyncGuard([]PortProto{{8080, "tcp"}}); err != nil {
+		t.Fatalf("SyncGuard: %v", err)
+	}
+	want("allow", "allow", "allow", "lo", "8080/tcp")
+	if err := be.SyncGuard(nil); err != nil {
+		t.Fatalf("SyncGuard(nil): %v", err)
+	}
+	want("allow", "allow", "allow")
 }
