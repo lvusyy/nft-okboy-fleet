@@ -18,11 +18,11 @@ import (
 //   - peer := host of r.RemoteAddr (port stripped).
 //   - if peer is a trusted proxy: return X-Real-IP, else the RIGHTMOST entry of
 //     X-Forwarded-For (the address the trusted proxy actually saw — nginx APPENDS
-//     the real peer; the leftmost is client-supplied and spoofable), else peer.
+//     the real peer; the leftmost is client-supplied and spoofable), else "".
 //   - if peer is NOT trusted: the peer IS the real client.
 //
 // A header value is used only if it is one IP literal, returned canonicalized.
-// A proxy header that is present but anything else ("any", a CIDR, a hostname)
+// A proxy header that is anything else ("any", a CIDR, a hostname), or missing,
 // yields "", which the knock handler refuses: the address ends up in a firewall
 // rule, where ufw would read "any" or "0.0.0.0/0" as "everyone" — and falling
 // back to the peer would allowlist the proxy itself when it is not on loopback.
@@ -37,9 +37,20 @@ func (s *Server) clientIP(r *http.Request) string {
 			parts := strings.Split(xff, ",")
 			return firewall.CanonicalIP(parts[len(parts)-1])
 		}
-		return peer
+		return ""
 	}
 	return peer
+}
+
+// requestIP is the address failed attempts are recorded and throttled under:
+// the client's, or — when clientIP cannot tell it (a trusted proxy that sent no
+// usable header) — the direct peer's, so such requests are throttled too
+// instead of escaping under an empty address.
+func (s *Server) requestIP(r *http.Request) string {
+	if ip := s.clientIP(r); ip != "" {
+		return ip
+	}
+	return hostOnly(r.RemoteAddr)
 }
 
 // isTrustedProxy reports whether peer is in cfg.TrustedProxies (default localhost
@@ -78,7 +89,7 @@ func (s *Server) throttleGate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if err := auth.CheckIPThrottle(s.db, s.clientIP(r),
+		if err := auth.CheckIPThrottle(s.db, s.requestIP(r),
 			s.cfg.ThrottleMaxFailures, s.cfg.ThrottleWindow); err != "" {
 			// 429 with the same {"ok":false,"error":<msg>} envelope app.py returns.
 			errJSON(w, http.StatusTooManyRequests, err)

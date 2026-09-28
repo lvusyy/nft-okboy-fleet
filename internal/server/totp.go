@@ -75,7 +75,7 @@ func (s *Server) totpFailed(r *http.Request, user *db.User, action string, repla
 		detail = strPtr("replay")
 	}
 	_ = s.db.LogAudit(user.Username, action, strPtr(user.Username), detail)
-	ip := s.clientIP(r)
+	ip := s.requestIP(r)
 	_ = s.db.RecordFailedAttempt(strPtr(user.Username), &ip, totpFailReason)
 }
 
@@ -168,7 +168,7 @@ func (s *Server) consumeTOTP(user *db.User, code string) (ok, replayed bool, err
 // code could replace/disable an enabled admin's 2FA. A first-time enroll is always
 // allowed so require_admin_totp cannot deadlock the very enrollment it demands.
 func (s *Server) totpEnroll(w http.ResponseWriter, r *http.Request) {
-	user, err := auth.RequireAdmin(s.db, r.Header.Get("Authorization"), s.cfg.SignatureTTL, s.clientIP(r))
+	user, err := auth.RequireAdmin(s.db, r.Header.Get("Authorization"), s.cfg.SignatureTTL, s.requestIP(r))
 	if err != "" {
 		s.adminError(w, err)
 		return
@@ -212,7 +212,7 @@ func (s *Server) totpEnroll(w http.ResponseWriter, r *http.Request) {
 // Mirrors app.py admin_totp_activate: 400 if there is no pending secret, 400 on an
 // invalid code, else enable TOTP.
 func (s *Server) totpActivate(w http.ResponseWriter, r *http.Request) {
-	user, err := auth.RequireAdmin(s.db, r.Header.Get("Authorization"), s.cfg.SignatureTTL, s.clientIP(r))
+	user, err := auth.RequireAdmin(s.db, r.Header.Get("Authorization"), s.cfg.SignatureTTL, s.requestIP(r))
 	if err != "" {
 		s.adminError(w, err)
 		return
@@ -246,7 +246,7 @@ func (s *Server) totpActivate(w http.ResponseWriter, r *http.Request) {
 // admin_totp_disable: when TOTP is enabled a current code is required (403 on a
 // wrong code), then the secret is cleared and the flag reset.
 func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request) {
-	user, err := auth.RequireAdmin(s.db, r.Header.Get("Authorization"), s.cfg.SignatureTTL, s.clientIP(r))
+	user, err := auth.RequireAdmin(s.db, r.Header.Get("Authorization"), s.cfg.SignatureTTL, s.requestIP(r))
 	if err != "" {
 		s.adminError(w, err)
 		return

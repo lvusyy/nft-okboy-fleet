@@ -52,10 +52,19 @@ func Open(path string) (*DB, error) {
 	if err := sdb.Ping(); err != nil {
 		return nil, err
 	}
+	// The database holds plaintext secrets. Some filesystems refuse chmod; that
+	// is tolerated only while nobody else can read the file anyway.
 	for _, f := range []string{path, path + "-wal", path + "-shm"} {
-		if err := os.Chmod(f, 0o600); err != nil && !os.IsNotExist(err) {
-			log.Printf("warning: could not restrict %s to owner-only (it holds plaintext secrets): %v", f, err)
+		err := os.Chmod(f, 0o600)
+		if err == nil || os.IsNotExist(err) {
+			continue
 		}
+		if st, serr := os.Stat(f); serr == nil && st.Mode().Perm()&0o077 == 0 {
+			log.Printf("warning: could not chmod %s (%v); it is owner-only already", f, err)
+			continue
+		}
+		_ = sdb.Close()
+		return nil, fmt.Errorf("%s holds plaintext secrets and is readable by other users, and chmod 600 failed: %w", f, err)
 	}
 	return &DB{sql: sdb, path: path}, nil
 }

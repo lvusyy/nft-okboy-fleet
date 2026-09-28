@@ -2,8 +2,10 @@ package cli
 
 import (
 	"flag"
+	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 
 	"nft-okboy-fleet/internal/config"
@@ -101,5 +103,29 @@ func TestSeedUsersFreshDBOnly(t *testing.T) {
 	seedUsers(cfg, d)
 	if u, _ := d.GetUserByUsername("alice"); u != nil {
 		t.Fatal("a deleted user must not be re-seeded, even into an empty users table")
+	}
+}
+
+// TestPruneBackupsTightensAll: backups within the retention count, or with
+// retention off, are made owner-only too — older versions wrote them
+// world-readable, with the same plaintext secrets as the database.
+func TestPruneBackupsTightensAll(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX file modes")
+	}
+	for _, keep := range []int{7, 0} {
+		dir := t.TempDir()
+		f := filepath.Join(dir, "nft-okboy-20260101-000000.db")
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		pruneBackups(dir, keep)
+		st, err := os.Stat(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.Mode().Perm() != 0o600 {
+			t.Fatalf("keep=%d: backup mode %v, want 0600", keep, st.Mode().Perm())
+		}
 	}
 }

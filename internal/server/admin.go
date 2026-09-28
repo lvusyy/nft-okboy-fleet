@@ -28,7 +28,7 @@ func (s *Server) adminError(w http.ResponseWriter, err string) {
 // 401/403 envelope and returns (nil, false). Thin shared head of every admin
 // handler (the Go form of `user, err = auth.require_admin(...); if err: ...`).
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) (*db.User, bool) {
-	user, err := auth.RequireAdmin(s.db, r.Header.Get("Authorization"), s.cfg.SignatureTTL, s.clientIP(r))
+	user, err := auth.RequireAdmin(s.db, r.Header.Get("Authorization"), s.cfg.SignatureTTL, s.requestIP(r))
 	if err != "" {
 		s.adminError(w, err)
 		return nil, false

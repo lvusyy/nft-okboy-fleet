@@ -15,7 +15,7 @@ import (
 // authenticated username or "" with the response already written (401). It is the
 // Go form of app.py's _auth() + the inline 401 every client handler does.
 func (s *Server) authUser(w http.ResponseWriter, r *http.Request) (string, bool) {
-	username, err := auth.VerifyHMAC(s.db, r.Header.Get("Authorization"), s.cfg.SignatureTTL, s.clientIP(r))
+	username, err := auth.VerifyHMAC(s.db, r.Header.Get("Authorization"), s.cfg.SignatureTTL, s.requestIP(r))
 	if err != "" {
 		errJSON(w, http.StatusUnauthorized, err)
 		return "", false

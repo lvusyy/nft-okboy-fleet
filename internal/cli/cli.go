@@ -860,21 +860,21 @@ func CmdBackup(cfgPath string, args []string) error {
 
 // pruneBackups enforces rolling retention: keep the newest `keep` nft-okboy-*.db
 // backups (and their .sha256 sidecars), removing the rest. keep <= 0 disables
-// pruning, matching the Python guard.
+// pruning (matching the Python guard), not the owner-only fix-up of old backups.
 func pruneBackups(dir string, keep int) {
-	if keep <= 0 {
-		return
-	}
 	matches, err := filepath.Glob(filepath.Join(dir, "nft-okboy-*.db"))
-	if err != nil || len(matches) <= keep {
+	if err != nil {
 		return
 	}
-	sort.Strings(matches) // timestamped names sort chronologically
 	// Backups written by older versions may be world-readable; they hold the same
-	// plaintext secrets as the DB.
+	// plaintext secrets as the DB. Tighten them all, pruned or not.
 	for _, m := range matches {
 		_ = os.Chmod(m, 0o600)
 	}
+	if keep <= 0 || len(matches) <= keep {
+		return
+	}
+	sort.Strings(matches) // timestamped names sort chronologically
 	for _, old := range matches[:len(matches)-keep] {
 		if err := os.Remove(old); err == nil {
 			_ = os.Remove(old + ".sha256")
