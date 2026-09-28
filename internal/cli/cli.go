@@ -16,7 +16,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 	"time"
 
 	"nft-okboy-fleet/internal/auth"
@@ -284,9 +283,8 @@ func warnFirewall(cfg *config.Config, be firewall.FirewallBackend) {
 		log.Printf("WARNING: nft_guard is false: the nftables backend only adds accept rules, which restrict nothing — managed ports stay open to everyone")
 	}
 	if c, ok := be.(interface{ Conflicts() []string }); ok {
-		if found := c.Conflicts(); len(found) > 0 {
-			log.Printf("NOTE: other firewalls also filter incoming traffic here: %s. An accept in nft-okboy's chain is not final: if one of them drops a managed port, allowlisted clients stay blocked — allow the port there (nft-okboy's guard then does the restricting), or on a ufw host use firewall_backend: ufw.",
-				strings.Join(found, "; "))
+		for _, f := range c.Conflicts() {
+			log.Printf("NOTE: %s", f)
 		}
 	}
 }
@@ -466,6 +464,9 @@ func CmdGroupAdd(cfgPath string, args []string) error {
 	}
 	if !firewall.ValidName(name) {
 		return fmt.Errorf("invalid group name %q (allowed: alphanumeric start, then [A-Za-z0-9_-], max 64)", name)
+	}
+	if *proto != "tcp" && *proto != "udp" {
+		return fmt.Errorf("proto must be tcp or udp, got %q", *proto)
 	}
 
 	_, d, err := loadCfgDB(cfgPath)

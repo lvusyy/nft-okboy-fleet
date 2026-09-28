@@ -72,6 +72,10 @@ func (u *UfwBackend) lock() (func(), error) {
 	}, nil
 }
 
+// MergesSameMatch: ufw keeps one rule per match — adding one that differs only
+// in its comment rewrites the comment of the existing rule ("Rules updated").
+func (u *UfwBackend) MergesSameMatch() bool { return true }
+
 // NewUfwBackend resolves the `ufw` binary and applies config defaults. It does
 // NOT touch the firewall; call EnsureBase for that.
 func NewUfwBackend(cfg UfwConfig) (*UfwBackend, error) {

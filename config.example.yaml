@@ -50,20 +50,26 @@ firewall_backend: nftables
 # Agent-side guard (edge nodes only): the agent opens ONLY these ports, refusing
 # any rule the hub pushes on another port — defense in depth if the hub is
 # compromised (a hostile hub still cannot tell this node to open, say, 22).
-# Empty / omitted = no restriction. No effect on the hub. CLI override: --allow-ports
+# With the nftables backend it is also the set of ports the agent may CLOSE to
+# non-allowlisted sources: a port not listed here is never guarded (the agent
+# logs a warning), so a hostile hub cannot close, say, 22 fleet-wide either.
+# Empty / omitted = no restriction on opening, and no guard. No effect on the hub.
+# CLI override: --allow-ports
 # agent_allowed_ports: [18080, 443]
 
 # ---- nftables backend (used when firewall_backend: nftables) ----
 # A dedicated `inet <nft_table>` table with one input chain at the given hook
 # priority: an accept rule per allowlisted IP, then a guard that drops new
 # connections (for UDP: every datagram) to each managed port from everyone else.
-# Managed ports = the groups' ports (server) or the node's group targets (agent,
-# narrowed to agent_allowed_ports). Other ports are never touched, so the table
+# Managed ports = the groups' ports (server) or the node's group targets that are
+# listed in agent_allowed_ports (agent). Other ports are never touched, so the table
 # coexists with the host / k8s firewall in their own tables. But an accept here is
 # not final: if another firewall on the host (ufw, firewalld, nftables.conf) drops a
 # managed port, allowlisted clients stay blocked — open the port there (the guard
-# then does the restricting), or on a ufw host use firewall_backend: ufw. The
-# server/agent logs the other firewalls it finds at startup.
+# then does the restricting), or on a ufw host use firewall_backend: ufw. Ports that
+# Docker (-p) or Kubernetes (NodePort) DNAT elsewhere never reach the input hook:
+# nft-okboy neither guards nor allowlists them. The server/agent logs the other
+# firewalls and nat chains it finds at startup.
 nft_table: nft_okboy
 nft_chain: input
 nft_priority: -150

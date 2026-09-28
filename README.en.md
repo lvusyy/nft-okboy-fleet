@@ -43,7 +43,9 @@ seamlessly — no rule sprawl, a full audit trail, zero standing exposure.
 - **Actually restricts** — each managed port (a group's port) is closed to every
   source that is not allowlisted: new TCP connections are dropped (established
   sessions survive), UDP datagrams are dropped, loopback is never filtered. Ports
-  it does not manage are left alone.
+  it does not manage are left alone. Ports that Docker (`-p`) or Kubernetes
+  (NodePort) DNAT elsewhere never reach the `input` hook — nft-okboy can neither
+  guard nor allowlist them, so do not make one a group port.
 - **Coexists with Kubernetes / host firewalls** — its own table, hook `input` at
   priority -150, never flushes anyone else's rules. But an nftables accept in one
   chain is **not final**: if another firewall on the host (ufw, firewalld, an
@@ -151,7 +153,8 @@ Open your first group, authorize the admin, then open the Web console and Connec
 
 ```bash
 nft-okboy group-add ssh 22       # manage port 22 as the "ssh" group (from now on 22 admits only
-                                 # IPs that knocked: keep this SSH session until you have connected)
+                                 # IPs that knocked: keep this SSH session until, after knocking,
+                                 # a second SSH login works)
 nft-okboy user-join admin ssh    # authorize admin for it
 ```
 

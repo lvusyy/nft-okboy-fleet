@@ -3,8 +3,13 @@ package agent
 import (
 	"context"
 	"crypto/x509"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -144,9 +149,10 @@ func hubStub(t *testing.T, status int, body string) (string, *http.Client) {
 	return srv.URL, srv.Client()
 }
 
-// TestStepGuardFollowsHubPorts: the guard covers the hub's ports narrowed to
-// agent_allowed_ports; nft_guard off removes it; a hub without "ports" (older
-// than the agent) leaves it as it is.
+// TestStepGuardFollowsHubPorts: the guard covers the hub's ports that are listed
+// in agent_allowed_ports — none without that list, so a hostile hub cannot close
+// arbitrary ports; nft_guard off removes it; a hub without "ports" (older than
+// the agent) leaves it as it is.
 func TestStepGuardFollowsHubPorts(t *testing.T) {
 	ctx := context.Background()
 	be := firewall.NewMockBackend("nft-okboy")
@@ -163,6 +169,12 @@ func TestStepGuardFollowsHubPorts(t *testing.T) {
 		t.Fatalf("allow rule missing: %v", got)
 	}
 
+	step(ctx, be, client, url, Options{Guard: true}, &state{})
+	if be.Guarded != nil {
+		t.Fatalf("without agent_allowed_ports the hub's ports must not be guarded, got %+v", be.Guarded)
+	}
+
+	step(ctx, be, client, url, opts, &state{})
 	opts.Guard = false
 	step(ctx, be, client, url, opts, &state{})
 	if be.Guarded != nil {
@@ -174,6 +186,125 @@ func TestStepGuardFollowsHubPorts(t *testing.T) {
 	step(ctx, be, oldClient, oldHub, Options{Guard: true}, &state{})
 	if len(be.Guarded) != 1 || be.Guarded[0].Port != 9 {
 		t.Fatalf("a hub without ports must leave the guard alone, got %+v", be.Guarded)
+	}
+}
+
+// TestGuardSurvivesRestartAndFlush: the last guard is kept in the state file, so
+// a restarted agent (reboot: empty firewall) guards at once, before and without
+// a hub answer — and one whose ruleset was flushed while the hub is down puts
+// the guard straight back.
+func TestGuardSurvivesRestartAndFlush(t *testing.T) {
+	ctx := context.Background()
+	stateFile := filepath.Join(t.TempDir(), "agent-guard.json")
+	body := `{"ok":true,"rules":[],"ports":[{"port":18080,"proto":"tcp"}]}`
+	url, client := hubStub(t, 200, body)
+	opts := Options{Guard: true, AllowedPorts: []int{18080}, StateFile: stateFile, HubURL: url}
+	want := []firewall.PortProto{{Port: 18080, Proto: "tcp"}}
+
+	be := firewall.NewMockBackend("nft-okboy")
+	step(ctx, be, client, url, opts, &state{})
+	if !reflect.DeepEqual(be.Guarded, want) {
+		t.Fatalf("guard = %+v, want %+v", be.Guarded, want)
+	}
+
+	// Reboot with the hub unreachable: a fresh firewall, a fresh agent.
+	down, _ := hubStub(t, 502, "bad gateway")
+	opts.HubURL = down
+	rebooted := firewall.NewMockBackend("nft-okboy")
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel() // Run does its start-up and one cycle, then returns
+	if err := Run(cancelled, rebooted, opts); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(rebooted.Guarded, want) {
+		t.Fatalf("after a restart without the hub: guard = %+v, want %+v", rebooted.Guarded, want)
+	}
+
+	// Ruleset flushed while the hub is down.
+	st := &state{}
+	loadGuard(opts, st)
+	rebooted.Guarded = nil
+	downURL, downClient := hubStub(t, 502, "bad gateway")
+	step(ctx, rebooted, downClient, downURL, opts, st)
+	if !reflect.DeepEqual(rebooted.Guarded, want) {
+		t.Fatalf("after a flush without the hub: guard = %+v, want %+v", rebooted.Guarded, want)
+	}
+
+	// The local config still rules while the hub is away: a port taken out of
+	// agent_allowed_ports is not guarded again from the saved state.
+	opts.AllowedPorts = []int{443}
+	step(ctx, rebooted, downClient, downURL, opts, st)
+	if rebooted.Guarded != nil {
+		t.Fatalf("a port no longer in agent_allowed_ports stays guarded: %+v", rebooted.Guarded)
+	}
+}
+
+// events is an ordered, locked log shared by a backend wrapper and a hub stub.
+type events struct {
+	mu  sync.Mutex
+	log []string
+}
+
+func (e *events) add(s string) { e.mu.Lock(); e.log = append(e.log, s); e.mu.Unlock() }
+
+func (e *events) all() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.log...)
+}
+
+// loggingGuard records each SyncGuard in events.
+type loggingGuard struct {
+	*firewall.MockBackend
+	ev *events
+}
+
+func (b loggingGuard) SyncGuard(p []firewall.PortProto) error {
+	b.ev.add(fmt.Sprintf("guard %v", p))
+	return b.MockBackend.SyncGuard(p)
+}
+
+// TestStepGuardBeforePull: the cached guard is back before the hub is asked —
+// a pull can hang for its whole timeout, and a flushed chain accepts everything
+// meanwhile.
+func TestStepGuardBeforePull(t *testing.T) {
+	ev := &events{}
+	be := loggingGuard{firewall.NewMockBackend("nft-okboy"), ev}
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ev.add("pull")
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer hub.Close()
+	want := []firewall.PortProto{{Port: 18080, Proto: "tcp"}}
+	st := &state{ports: want, havePorts: true}
+	step(context.Background(), be, hub.Client(), hub.URL, Options{Guard: true, AllowedPorts: []int{18080}}, st)
+	if got := ev.all(); len(got) < 2 || got[0] != fmt.Sprintf("guard %v", want) || got[1] != "pull" {
+		t.Fatalf("events %v: the guard must be back before the pull", got)
+	}
+}
+
+// TestSaveGuardRetries: a state write that failed is retried on the next cycle,
+// even though the guard itself did not change.
+func TestSaveGuardRetries(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "state")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{StateFile: filepath.Join(blocker, "agent-guard.json")}
+	ports := []firewall.PortProto{{Port: 18080, Proto: "tcp"}}
+	st := &state{}
+	saveGuard(opts, st, ports) // a file is in the way of the directory
+	if st.saved {
+		t.Fatal("a failed write must not count as saved")
+	}
+	if err := os.Remove(blocker); err != nil {
+		t.Fatal(err)
+	}
+	saveGuard(opts, st, ports)
+	loaded := &state{}
+	loadGuard(opts, loaded)
+	if !st.saved || !reflect.DeepEqual(loaded.ports, ports) {
+		t.Fatalf("not retried: saved=%v, file holds %+v", st.saved, loaded.ports)
 	}
 }
 

@@ -154,6 +154,9 @@ func groupTargetAdd(cfgPath string, args []string) error {
 	if port < 1 || port > 65535 {
 		return fmt.Errorf("port %d out of range (1-65535)", port)
 	}
+	if *proto != "tcp" && *proto != "udp" {
+		return fmt.Errorf("proto must be tcp or udp, got %q", *proto)
+	}
 	_, d, err := loadCfgDB(cfgPath)
 	if err != nil {
 		return err

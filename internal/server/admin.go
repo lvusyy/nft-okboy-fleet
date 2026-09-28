@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -152,6 +153,8 @@ func (s *Server) adminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "User not found")
 		return
 	}
+	s.fwMu.Lock() // the firewall and the database change together (see fwMu)
+	defer s.fwMu.Unlock()
 	target, err := s.db.GetUser(userID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
@@ -257,6 +260,8 @@ func (s *Server) adminAddMembership(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "User not found")
 		return
 	}
+	s.fwMu.Lock() // the firewall and the database change together (see fwMu)
+	defer s.fwMu.Unlock()
 	target, err := s.db.GetUser(userID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
@@ -307,6 +312,8 @@ func (s *Server) adminRemoveMembership(w http.ResponseWriter, r *http.Request) {
 	if s.stepUp(w, r, user, body) {
 		return
 	}
+	s.fwMu.Lock() // the firewall and the database change together (see fwMu)
+	defer s.fwMu.Unlock()
 	target, err := s.db.GetUserByUsername(jsonString(body, "username"))
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
@@ -357,6 +364,8 @@ func (s *Server) adminRevokeUser(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "User not found")
 		return
 	}
+	s.fwMu.Lock() // the firewall and the database change together (see fwMu)
+	defer s.fwMu.Unlock()
 	target, err := s.db.GetUser(userID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
@@ -531,6 +540,8 @@ func (s *Server) adminDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "Group not found")
 		return
 	}
+	s.fwMu.Lock() // the firewall and the database change together (see fwMu)
+	defer s.fwMu.Unlock()
 	group, err := s.db.GetGroup(groupID)
 	if err != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
@@ -555,7 +566,9 @@ func (s *Server) adminDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.db.LogAudit(user.Username, "group_del", strPtr(group.Name), nil)
-	s.syncGuardNow() // the port is no longer managed by nft-okboy
+	if err := s.syncGuard(); err != nil { // the port is no longer managed by nft-okboy
+		log.Printf("firewall guard: %v", err)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": groupID})
 }
 

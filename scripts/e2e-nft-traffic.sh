@@ -13,6 +13,9 @@
 #   B. hub (firewall_backend: none) + agent (nftables)
 #      - same allow/drop result on the agent's host
 #      - deleting the node on the hub makes the agent drop its allow rules
+#      - the guard outlives both the allow rules and the hub: after a flush while
+#        the hub rejects the node, and after a restart with the hub down, the
+#        port is closed again at once
 #
 # Usage (root; Linux with nft, iproute2, curl, openssl, python3):
 #   sudo BIN=/tmp/nft-okboy bash scripts/e2e-nft-traffic.sh
@@ -160,12 +163,18 @@ sed -e 's/^firewall_backend: nftables/firewall_backend: none/' "$WORK/srv.yaml" 
 TOKEN=$(S "$BIN" -c "$WORK/hub.yaml" node-add edge | grep -oE '[0-9a-f]{64}' | head -1)
 S "$BIN" -c "$WORK/hub.yaml" group-target add web edge "$PORT" >/dev/null
 serve "$WORK/hub.yaml" "$WORK/hub.log" || exit 1
+HUBPID=${PIDS[-1]}
 cat > "$WORK/agent.yaml" <<EOF
 firewall_backend: nftables
 rule_prefix: nft-okboy
 agent_allowed_ports: [$PORT]
 EOF
-NFT_OKBOY_TOKEN="$TOKEN" bg "$BIN" -c "$WORK/agent.yaml" agent --hub http://127.0.0.1:5000 --node edge --interval 1 >"$WORK/agent.log" 2>&1
+agent() { # agent <log>: start the agent (guard state kept in $WORK)
+	NFT_OKBOY_TOKEN="$TOKEN" bg "$BIN" -c "$WORK/agent.yaml" agent --hub http://127.0.0.1:5000 --node edge \
+		--interval 1 --state "$WORK/agent-guard.json" >"$1" 2>&1
+}
+agent "$WORK/agent.log"
+AGENTPID=${PIDS[-1]}
 [ "$(knock 10.99.0.2)" = 200 ] || fail "knock via hub failed"
 sleep 3
 expect 10.99.0.2 open    "agent: allowlisted client connects"
@@ -174,6 +183,17 @@ S "$BIN" -c "$WORK/hub.yaml" node-del edge >/dev/null
 sleep 3
 expect 10.99.0.2 blocked "agent: node deleted on the hub → its allow rules are gone"
 grep -q "rejected this node's token" "$WORK/agent.log" && ok "agent logged the revocation" || { fail "no revocation log"; sed 's/^/    /' "$WORK/agent.log"; }
+
+# Fail closed, not open: the ruleset flushed (systemctl restart nftables) while
+# the hub rejects the node, then a reboot-like restart with the hub down.
+S nft delete table inet nft_okboy
+sleep 3
+expect 10.99.0.3 blocked "agent: guard back after a flush while the hub rejects the node"
+kill "$AGENTPID" "$HUBPID"; wait "$AGENTPID" "$HUBPID" 2>/dev/null
+S nft delete table inet nft_okboy
+agent "$WORK/agent2.log"
+sleep 2
+expect 10.99.0.3 blocked "agent: restarted with the hub down → guard back before any answer"
 
 echo
 echo "### RESULT (nft traffic): $FAILS failure(s) ###"

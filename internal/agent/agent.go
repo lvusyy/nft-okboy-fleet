@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -30,8 +32,13 @@ type Options struct {
 	// compromised hub still cannot tell this node to open, say, SSH. Empty = all.
 	AllowedPorts []int
 	// Guard (nft_guard) makes an nftables backend close the node's managed ports
-	// to everyone its allow rules do not admit; false removes that guard.
+	// to everyone its allow rules do not admit; false removes that guard. Only
+	// ports listed in AllowedPorts are ever guarded: the hub reports which ports
+	// the node manages, but must not be able to close arbitrary ones.
 	Guard bool
+	// StateFile keeps the last guard applied, so it is back at once after a
+	// reboot or a flushed ruleset even while the hub cannot be asked ("" = off).
+	StateFile string
 }
 
 // rule is one desired allow rule as served by the hub's node desired-state API.
@@ -59,9 +66,15 @@ type desiredResp struct {
 // token replaced. Unlike a network or server error, that is an answer.
 var errRevoked = errors.New("the hub rejected this node's token (node deleted or token replaced)")
 
-// state is what the loop remembers between cycles (to log changes once).
+// state is what the loop remembers between cycles.
 type state struct {
-	revoked, warnedNoPorts bool
+	revoked, warnedNoPorts bool   // log a condition once
+	unguarded              string // hub ports last reported as outside AllowedPorts
+	// ports is the guard last applied (nil = none); havePorts says it is known
+	// (applied in this run, or loaded from Options.StateFile); saved says the
+	// state file holds it.
+	ports            []firewall.PortProto
+	havePorts, saved bool
 }
 
 // Run is the agent loop: pull the node's desired state from the hub, reconcile
@@ -84,6 +97,7 @@ func Run(ctx context.Context, be firewall.FirewallBackend, opts Options) error {
 	log.Printf("agent: node=%q hub=%s interval=%s", opts.NodeName, url, opts.Interval)
 
 	st := &state{}
+	loadGuard(opts, st)
 	for {
 		step(ctx, be, client, url, opts, st)
 		select {
@@ -103,6 +117,9 @@ func step(ctx context.Context, be firewall.FirewallBackend, client *http.Client,
 		log.Printf("agent: firewall base: %v", err)
 		return
 	}
+	// Put the last guard back before asking the hub: a flush or reboot must not
+	// leave the ports open while the pull is pending (up to its timeout) or fails.
+	reapplyGuard(be, opts, st)
 	dr, err := fetch(ctx, client, url, opts)
 	if errors.Is(err, errRevoked) {
 		// Fail closed: a node the hub no longer knows must not keep admitting
@@ -131,9 +148,10 @@ func step(ctx context.Context, be firewall.FirewallBackend, client *http.Client,
 }
 
 // syncGuard (nftables backend) closes the node's managed ports — the hub's
-// "ports", narrowed to AllowedPorts when set, exactly like the allow rules — to
-// everyone the allow rules do not admit. A hub too old to send "ports" leaves
-// the guard as it is.
+// "ports" that are also listed in AllowedPorts — to everyone the allow rules do
+// not admit. Without AllowedPorts nothing is guarded: which ports get closed is
+// the node's decision, so a compromised hub cannot close, say, SSH fleet-wide.
+// A hub too old to send "ports" leaves the last guard in place.
 func syncGuard(be firewall.FirewallBackend, dr *desiredResp, opts Options, st *state) {
 	g, ok := be.(firewall.Guard)
 	if !ok {
@@ -148,19 +166,144 @@ func syncGuard(be firewall.FirewallBackend, dr *desiredResp, opts Options, st *s
 			}
 			return
 		}
-		allowed := make(map[int]bool, len(opts.AllowedPorts))
-		for _, p := range opts.AllowedPorts {
-			allowed[p] = true
-		}
+		hub := make([]firewall.PortProto, 0, len(*dr.Ports))
 		for _, p := range *dr.Ports {
-			if len(allowed) == 0 || allowed[p.Port] {
-				ports = append(ports, firewall.PortProto{Port: p.Port, Proto: p.Proto})
+			hub = append(hub, firewall.PortProto{Port: p.Port, Proto: p.Proto})
+		}
+		var skipped []firewall.PortProto
+		ports, skipped = splitAllowed(hub, opts.AllowedPorts)
+		if msg := portList(skipped); msg != st.unguarded {
+			st.unguarded = msg
+			if msg != "" {
+				log.Printf("agent: the hub manages %s on this node, but agent_allowed_ports does not list it: nft-okboy neither opens nor closes it here (only listed ports are guarded, so a compromised hub cannot close arbitrary ports)", msg)
 			}
 		}
 	}
 	if err := g.SyncGuard(ports); err != nil {
 		log.Printf("agent: guard: %v", err)
+		return
 	}
+	saveGuard(opts, st, ports)
+}
+
+// splitAllowed separates the ports listed in allowed from the others (all of
+// them are "others" when allowed is empty).
+func splitAllowed(ports []firewall.PortProto, allowed []int) (in, out []firewall.PortProto) {
+	ok := make(map[int]bool, len(allowed))
+	for _, p := range allowed {
+		ok[p] = true
+	}
+	for _, p := range ports {
+		if ok[p.Port] {
+			in = append(in, p)
+		} else {
+			out = append(out, p)
+		}
+	}
+	return in, out
+}
+
+// portList renders ports as "22/tcp, 53/udp" ("" for none).
+func portList(ports []firewall.PortProto) string {
+	s := make([]string, 0, len(ports))
+	for _, p := range ports {
+		s = append(s, fmt.Sprintf("%d/%s", p.Port, p.Proto))
+	}
+	return strings.Join(s, ", ")
+}
+
+// reapplyGuard puts the last known guard back (SyncGuard is a no-op when it is
+// still in place). step calls it every cycle before the pull, so a flushed or
+// rebooted firewall is guarded again at once, whatever the hub answers — and
+// however long it takes to. The current config still rules: nft_guard off, or a
+// port no longer listed in AllowedPorts, is honoured before the hub answers.
+func reapplyGuard(be firewall.FirewallBackend, opts Options, st *state) {
+	g, ok := be.(firewall.Guard)
+	if !ok || !st.havePorts {
+		return
+	}
+	var ports []firewall.PortProto
+	if opts.Guard {
+		ports, _ = splitAllowed(st.ports, opts.AllowedPorts)
+	}
+	if err := g.SyncGuard(ports); err != nil {
+		log.Printf("agent: guard: %v", err)
+	}
+}
+
+// loadGuard reads the guard saved by a previous run (none on the first run).
+func loadGuard(opts Options, st *state) {
+	if opts.StateFile == "" {
+		return
+	}
+	b, err := os.ReadFile(opts.StateFile)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("agent: guard state: %v", err)
+		}
+		return
+	}
+	var ports []firewall.PortProto
+	if err := json.Unmarshal(b, &ports); err != nil {
+		log.Printf("agent: guard state %s: %v", opts.StateFile, err)
+		return
+	}
+	st.ports, st.havePorts, st.saved = ports, true, true
+}
+
+// saveGuard remembers ports as the applied guard and writes it to
+// Options.StateFile unless the file already holds it — so a failed write is
+// retried on the next cycle.
+func saveGuard(opts Options, st *state, ports []firewall.PortProto) {
+	if !st.havePorts || !samePorts(st.ports, ports) {
+		st.ports, st.havePorts, st.saved = ports, true, false
+	}
+	if opts.StateFile == "" || st.saved {
+		return
+	}
+	if err := writeState(opts.StateFile, ports); err != nil {
+		log.Printf("agent: guard state (retried next cycle): %v", err)
+		return
+	}
+	st.saved = true
+}
+
+// writeState stores ports atomically: a synced temp file renamed over the old.
+func writeState(path string, ports []firewall.PortProto) error {
+	b, err := json.Marshal(ports)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(b); err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func samePorts(a, b []firewall.PortProto) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func errSuffix(err error) string {

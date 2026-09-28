@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os/exec"
 	"sort"
@@ -232,6 +233,9 @@ func (n *NftBackend) SyncGuard(ports []PortProto) error {
 	if guardAtTail(chain, guard, want) {
 		return nil
 	}
+	if !sameGuard(guard, want) { // not just moved back to the tail: say what changed
+		log.Printf("nftables guard: %s", describeGuard(want))
+	}
 	var cmds []any
 	for _, g := range guard {
 		cmds = append(cmds, map[string]any{"delete": map[string]any{"rule": map[string]any{
@@ -267,6 +271,32 @@ func guardLayout(ports []PortProto) []PortProto {
 		return drops[i].Proto < drops[j].Proto
 	})
 	return append([]PortProto{{}}, drops...)
+}
+
+// sameGuard reports whether the guard rules cover exactly want (wherever they are).
+func sameGuard(guard []Rule, want []PortProto) bool {
+	if len(guard) != len(want) {
+		return false
+	}
+	for i, r := range guard {
+		if r.Port != want[i].Port || r.Proto != want[i].Proto {
+			return false
+		}
+	}
+	return true
+}
+
+// describeGuard says, for the log, which ports the guard (as laid out by
+// guardLayout) closes.
+func describeGuard(want []PortProto) string {
+	if len(want) == 0 {
+		return "removed — no port is closed to sources that have not knocked"
+	}
+	ps := make([]string, 0, len(want)-1)
+	for _, p := range want[1:] { // want[0] is the loopback bypass
+		ps = append(ps, fmt.Sprintf("%d/%s", p.Port, p.Proto))
+	}
+	return "new connections to " + strings.Join(ps, ", ") + " are dropped unless their source knocked"
 }
 
 // guardAtTail reports whether the guard rules are exactly want, in order, as the
@@ -318,15 +348,18 @@ func (n *NftBackend) guardRule(p PortProto) map[string]any {
 	}
 }
 
-// Conflicts describes the other firewalls that also filter incoming traffic on
-// this host: every other base chain on the input hook (ufw on iptables-nft,
-// firewalld, a host nftables.conf, kube-proxy …) plus an active ufw, which nft
-// cannot see when it runs on legacy iptables. nft-okboy's accept is not final, so
-// if one of these drops a guarded port, allowlisted clients remain blocked until
-// that firewall opens the port (nft-okboy's guard then does the restricting) — or
-// use firewall_backend: ufw on a ufw host.
+// Conflicts explains, one finding per string, what else on this host decides
+// whether a managed port is reachable:
+//   - other firewalls filtering incoming traffic: every other base chain on the
+//     input hook (ufw on iptables-nft, firewalld, a host nftables.conf …) and an
+//     active ufw, which nft cannot see when it runs on legacy iptables.
+//     nft-okboy's accept is not final, so if one of them drops a managed port,
+//     allowlisted clients stay blocked until it opens the port;
+//   - nat chains on the prerouting hook (Docker, kube-proxy): a port they DNAT is
+//     forwarded, not delivered to this host, so its traffic never reaches the
+//     input hook — nft-okboy neither guards nor allowlists it.
 func (n *NftBackend) Conflicts() []string {
-	var found []string
+	var filters, nats []string
 	if out, err := n.runJSONRead("list", "chains"); err == nil && len(out) > 0 {
 		var doc struct {
 			Nftables []struct {
@@ -334,6 +367,7 @@ func (n *NftBackend) Conflicts() []string {
 					Family string `json:"family"`
 					Table  string `json:"table"`
 					Name   string `json:"name"`
+					Type   string `json:"type"`
 					Hook   string `json:"hook"`
 					Prio   any    `json:"prio"`
 					Policy string `json:"policy"`
@@ -343,10 +377,13 @@ func (n *NftBackend) Conflicts() []string {
 		if json.Unmarshal(out, &doc) == nil {
 			for _, item := range doc.Nftables {
 				c := item.Chain
-				if c == nil || c.Hook != "input" || (c.Family == "inet" && c.Table == n.cfg.Table) {
-					continue
+				switch {
+				case c == nil || (c.Family == "inet" && c.Table == n.cfg.Table):
+				case c.Hook == "input":
+					filters = append(filters, fmt.Sprintf("nft chain %s %s %s (priority %v, policy %s)", c.Family, c.Table, c.Name, c.Prio, c.Policy))
+				case c.Hook == "prerouting" && c.Type == "nat":
+					nats = append(nats, fmt.Sprintf("%s %s %s", c.Family, c.Table, c.Name))
 				}
-				found = append(found, fmt.Sprintf("nft chain %s %s %s (priority %v, policy %s)", c.Family, c.Table, c.Name, c.Prio, c.Policy))
 			}
 		}
 	}
@@ -356,8 +393,20 @@ func (n *NftBackend) Conflicts() []string {
 		cmd := exec.CommandContext(ctx, path, "status")
 		cmd.Env = append(cmd.Environ(), "LANG=C", "LC_ALL=C")
 		if out, err := cmd.Output(); err == nil && strings.Contains(string(out), "Status: active") {
-			found = append(found, "ufw is active")
+			filters = append(filters, "ufw is active")
 		}
+	}
+	var found []string
+	if len(filters) > 0 {
+		found = append(found, "other firewalls also filter incoming traffic here: "+strings.Join(filters, "; ")+
+			". An accept in nft-okboy's chain is not final: if one of them drops a managed port, allowlisted clients stay blocked"+
+			" — allow the port there (nft-okboy's guard then does the restricting), or on a ufw host use firewall_backend: ufw.")
+	}
+	if len(nats) > 0 {
+		found = append(found, "nat chains on the prerouting hook ("+strings.Join(nats, "; ")+
+			") can forward ports elsewhere (Docker -p, Kubernetes NodePort): forwarded traffic never reaches the input hook,"+
+			" so nft-okboy neither guards nor allowlists such a port — do not make one a group port, or restrict it on the"+
+			" forward path (e.g. Docker's DOCKER-USER chain).")
 	}
 	return found
 }

@@ -128,6 +128,49 @@ func TestUfwIntegration(t *testing.T) {
 // interleave — else one resolves a number, another delete shifts a different
 // rule into it, and a host rule is removed. Managed rules are interleaved with
 // host rules and deleted from many goroutines at once; every host rule survives.
+// TestUfwIntegrationSharedAddress: two users knocking from one address into the
+// same group share ufw's single rule (ufw rewrites its comment). ReconcileAll
+// must settle on it instead of re-adding it on every maintenance pass.
+func TestUfwIntegrationSharedAddress(t *testing.T) {
+	be, err := NewUfwBackend(UfwConfig{Prefix: "okboy-share"})
+	if err != nil {
+		t.Fatalf("NewUfwBackend: %v", err)
+	}
+	cleanup := func() {
+		rules, _ := be.ListManaged()
+		for _, r := range rules {
+			_ = be.DeleteByHandle(r.Handle)
+		}
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+	desired := []Rule{
+		{IP: "203.0.113.40", Port: 9443, Proto: "tcp", User: "alice", Group: "web"},
+		{IP: "203.0.113.40", Port: 9443, Proto: "tcp", User: "bob", Group: "web"},
+	}
+	if _, _, err := ReconcileAll(be, desired); err != nil {
+		t.Fatalf("ReconcileAll: %v", err)
+	}
+	rules, _ := be.ListManaged()
+	if len(rules) != 1 {
+		t.Fatalf("ufw should hold one rule for the shared match, got %+v", rules)
+	}
+	if a, r, err := ReconcileAll(be, desired); err != nil || a != 0 || r != 0 {
+		t.Fatalf("second pass: +%d/-%d (err %v), want no change", a, r, err)
+	}
+	// Whoever the comment names leaves: the rule is handed to the other user.
+	keep := desired[0]
+	if rules[0].User == "alice" {
+		keep = desired[1]
+	}
+	if _, _, err := ReconcileAll(be, []Rule{keep}); err != nil {
+		t.Fatalf("ReconcileAll: %v", err)
+	}
+	if rules, _ = be.ListManaged(); len(rules) != 1 || rules[0].User != keep.User {
+		t.Fatalf("after one user left: %+v, want one rule for %s", rules, keep.User)
+	}
+}
+
 func TestUfwIntegrationConcurrentDeletes(t *testing.T) {
 	be, err := NewUfwBackend(UfwConfig{Prefix: "okboy-race"})
 	if err != nil {

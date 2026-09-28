@@ -35,7 +35,8 @@ IP 就被自动注册进防火墙；规则整洁、可追溯、能自愈。**单
 - **每次 knock 原子幂等 reconcile**——把防火墙调整到与数据库**完全一致**（补缺、删除
   旧 IP/失效组/残留规则），从竞态、崩溃、并发变更中自愈。
 - **真正拦截**——受管端口（各组的端口）对白名单以外的来源一律关闭：TCP 丢弃新连接（已建立的会话
-  不受影响），UDP 丢弃所有数据报；本机回环不受限。只管受管端口，别的端口原样不动。
+  不受影响），UDP 丢弃所有数据报；本机回环不受限。只管受管端口，别的端口原样不动。Docker（`-p`）、
+  Kubernetes（NodePort）经 DNAT 转发走的端口不经过 `input` 钩子，拦不住也放行不了，别配成组端口。
 - **与 Kubernetes / 主机防火墙共存**——独占表、`input` 钩子优先级 -150、永不 flush 别人的规则。
   但 nftables 里一条链的放行**不是最终结论**：主机上另有防火墙（ufw、firewalld、nftables.conf）
   拦了受管端口时，白名单用户照样进不来——要么在那边放开该端口（由 nft-okboy 负责筛选），要么
@@ -126,7 +127,7 @@ curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deplo
 
 ```bash
 nft-okboy group-add ssh 22       # 把 22 端口纳管为 "ssh" 组（从此 22 只放行敲过门的 IP：
-                                 # 在 Web 管理台或 knock.sh 连上之前，别断开当前 SSH 会话）
+                                 # 敲门后另开一个 SSH 会话确认能登录，再断开当前会话）
 nft-okboy user-join admin ssh    # 授权 admin 使用该组
 ```
 
@@ -174,7 +175,7 @@ systemctl enable --now nft-okboy-agent
 # ③ 客户端敲一次 hub —— 授权的所有节点自动放行（一次 knock 覆盖全队列）
 ```
 
-- **🛡 安全护栏**：`agent_allowed_ports: [18080]` —— 节点只开白名单端口，**hub 被攻破也开不了 SSH**。
+- **🛡 安全护栏**：`agent_allowed_ports: [18080]` —— 节点只开、也只关白名单端口，**hub 被攻破也开不了（关不掉）SSH**；nftables 节点的防护只覆盖这里列出的端口。
 - **📊 观测**：`nft-okboy node-list` 看各节点 online / version / backend / 规则数。
 - **⬆ 自升级**：启用 `nft-okboy-agent-upgrade.timer` 即可让 agent 每日自更新。
 

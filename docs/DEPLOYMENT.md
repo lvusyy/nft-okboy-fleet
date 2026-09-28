@@ -11,11 +11,18 @@ nft-okboy 是**一个二进制**，可按需运行三种模式，并搭配三种
 > **agent 的安全模型**：纯出站连接 hub，**无数据库、不监听任何公网端口**。即便 hub 被攻破，
 > agent 的本地 `agent_allowed_ports` 白名单也能拒绝越界端口（见下）。
 
-> **nftables 后端怎么拦**：受管端口（服务端 = 各组的端口；agent = hub 下发的本节点目标端口，再按
-> `agent_allowed_ports` 收窄）对白名单以外的来源关闭——TCP 丢弃新连接、已建立的会话不断，UDP 丢弃所有数据报，
+> **nftables 后端怎么拦**：受管端口（服务端 = 各组的端口；agent = hub 下发的本节点目标端口中、列在
+> `agent_allowed_ports` 里的那些）对白名单以外的来源关闭——TCP 丢弃新连接、已建立的会话不断，UDP 丢弃所有数据报，
 > 本机回环不受限。其余端口 nft-okboy 不碰。主机上若还有别的防火墙（ufw、firewalld、nftables.conf）拦着受管端口，
 > 白名单用户照样进不来：nftables 里一条链的放行不是最终结论。此时要么在那边放开该端口（由 nft-okboy 负责筛选），
 > 要么在 ufw 主机上改用 `firewall_backend: ufw`。启动日志会列出检测到的其他防火墙。
+>
+> Docker（`-p`）或 Kubernetes（NodePort）经 DNAT 转发走的端口不经过 input 钩子，nft-okboy 既拦不住也放行不了，
+> 别把这类端口配成组端口（或在转发路径上限制，例如 Docker 的 `DOCKER-USER` 链）。启动日志发现 nat 链时会提示。
+>
+> hub 兼做节点时（同一台机器上既跑 `serve` 又跑 `agent`），两者**不能共用同一张表**：各自按自己的期望状态对账，
+> 会把对方的规则和防护当作多余的删掉。要么 hub 用 `firewall_backend: none`，要么给 agent 单独配 `nft_table`
+> （ufw 后端则配不同的 `rule_prefix`）。
 >
 > **从 v0.3.x 升级**：旧版 nftables 后端只加放行规则、实际什么也拦不住（端口对所有人开放，或被主机防火墙全挡）。
 > 升级后受管端口立即对白名单以外关闭。升级前先确认你依赖的访问（比如 SSH 所在的组端口）已经有人敲门；
@@ -37,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/lvusyy/nft-okboy-fleet/master/deplo
 → 建 admin 并打印一次性密钥。然后：
 
 ```bash
-nft-okboy group-add ssh 22         # 把 22 端口纳管为 "ssh" 组（此后只放行敲过门的 IP，连上之前别断开当前会话）
+nft-okboy group-add ssh 22         # 把 22 端口纳管为 "ssh" 组（此后只放行敲过门的 IP；敲门后另开一个 SSH 会话确认能连上，再断开当前会话）
 nft-okboy user-join admin ssh      # 授权 admin
 ```
 
@@ -113,7 +120,7 @@ sudo install -Dm644 deploy/nft-okboy-agent.service /etc/systemd/system/nft-okboy
 sudo install -Dm644 /dev/stdin /etc/nft-okboy/agent.yaml <<'YAML'
 firewall_backend: nftables      # 或 ufw（按节点防火墙选）
 rule_prefix: nft-okboy
-agent_allowed_ports: [18080]    # 安全护栏：本节点只允许开这些端口（见下）
+agent_allowed_ports: [18080]    # 安全护栏：本节点只允许开、也只会关这些端口（见下）
 YAML
 
 # hub 地址 / 节点名 / token（0600；token 经环境变量传给 agent，不进 unit、不入日志，也不出现在 ps 能看到的进程参数里）
@@ -138,10 +145,16 @@ sudo systemctl enable --now nft-okboy-agent
 客户端（Web UI / `knock.py` / `knock.sh`）指向 **hub**，认证一次即可。hub 据此算出该用户授权的
 所有 `(节点, 端口)`，各节点 agent 在下个心跳拉取并放行——**一次 knock 覆盖你授权的所有机器**。
 
-### 🛡 安全护栏：`agent_allowed_ports`（强烈建议）
+### 🛡 安全护栏：`agent_allowed_ports`（强烈建议；nftables 节点必配）
 
 agent 在本地过滤 hub 下发的期望状态，**只开白名单内端口**，丢弃其余并告警。这样即便 hub 被攻破，
-也命令不动某节点去开 SSH 等敏感端口：
+也命令不动某节点去开 SSH 等敏感端口。
+
+nftables 节点上它同时是**防护能关闭的端口范围**：hub 下发的本节点端口里，只有列在这里的才会对白名单以外关闭；
+没配时 agent 不关任何端口（只放行、什么也拦不住）并在日志里告警。这样被攻破的 hub 也没法让全队列关掉 SSH。
+
+agent 把最近一次生效的防护记在 `/var/lib/nft-okboy/agent-guard.json`（`--state` 可改，`""` 关闭）：
+重启或规则集被清空后，即使暂时连不上 hub，也会立即恢复防护。
 
 ```yaml
 # agent.yaml
