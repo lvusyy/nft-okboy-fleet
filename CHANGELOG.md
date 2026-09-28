@@ -2,7 +2,17 @@
 
 All notable changes to nft-okboy-fleet are documented in this file, newest first. The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Binaries and checksums for every version are on the [releases page](https://github.com/lvusyy/nft-okboy-fleet/releases).
 
-## [Unreleased]
+## v0.4.1 (2026-09-29)
+
+The ufw backend no longer rewrites the host's own rules and holds still while ufw is disabled; the documentation was checked against the code and completed ([#3](https://github.com/lvusyy/nft-okboy-fleet/pull/3), [#4](https://github.com/lvusyy/nft-okboy-fleet/pull/4)).
+
+### Read before upgrading from v0.4.0
+
+- On ufw hosts, earlier versions may already have rewritten rules of your own (see Security): such a rule now reads `ALLOW IN` with a managed comment (`<rule_prefix>:<user>:<group>`), even where it was a `DENY`, and nft-okboy treats it as its own. Look in `sudo ufw status numbered` for managed rules on sources and ports you had rules for, and add your rule again: ufw replaces the managed rule with it, and nft-okboy leaves it alone from then on.
+
+### Security
+
+- ufw backend: a rule of the host's own with the same source, port and protocol as a managed rule is left in charge, and no managed rule is added over it (logged once per source, port and protocol); where such a rule of `serve`'s own host denies or rejects, the knock says so in its response (an agent logs it on its node). ufw keeps one rule per such match, so adding the managed rule used to rewrite the host's: a `DENY` became a managed `ALLOW`, and an `ALLOW` could later be deleted along with the managed access. A host rule that also names a source port, a destination address or an interface, or has no protocol, is a different match to ufw and was never affected. A rule counts as nft-okboy's only when it is an allow rule with its comment prefix.
 
 ### Added
 
@@ -15,6 +25,10 @@ All notable changes to nft-okboy-fleet are documented in this file, newest first
 
 ### Fixed
 
+- ufw backend, while ufw is disabled (it then lists no rules but keeps them): nft-okboy no longer takes the empty list for "no rules" and leaves ufw alone until it is enabled; then `serve` catches up within 30 seconds and agents in their next cycle. Until then, rules saved before ufw was disabled that went stale meanwhile (after an IP change or a revoke) are in force again once it is enabled. Knocks are still recorded (a hub's nodes need them), with a warning in the response. Before, removals found nothing to remove and reported success, and `serve` and the agents re-added their rules on every pass and logged it as a repair.
+- A revoke or a user deletion, from the CLI or the admin API, removes all of the user's managed rules, at whatever address, not only those at the current one; a rule left at an earlier address stayed open until the next maintenance pass.
+- Firewall changes that fail are reported: the CLI commands `user-del`, `user-join`, `user-leave`, `group-del` and `revoke` print a warning (and go ahead with the database change even when the firewall cannot be driven at all), and the API's revoke, user deletion, group deletion and membership removal (a user disabling one of their groups included) return one that points to the retry every 30 seconds, which the web console now shows in the admin view (the revoke warning used to suggest `cleanup`, which does not handle revoked users). The web console's status line no longer calls every knock warning an anomaly. `revoke` no longer claims the ports are closed: a rule of the host's own may still admit the address.
+- ufw runs with `LANGUAGE=C` as well as `LANG=C LC_ALL=C`: ufw takes its language from `LANGUAGE` first, so on a host with, say, `LANGUAGE=zh_CN` and ufw translations installed its status line was translated and an active ufw was reported as inactive.
 - Documentation corrected against the code and completed: both READMEs (the English one gains the fleet section), the deployment guide, the roadmap, the comments in `config.example.yaml` and the package documentation. Among other things:
   - complete CLI and HTTP API references, including the request signature, the agent options and the node API;
   - the runtime needs `nft` (or `ufw`); the default table is `nft_okboy`; a `config.yaml` next to the binary takes precedence over `/etc/nft-okboy/config.yaml`;

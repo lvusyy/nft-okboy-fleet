@@ -41,7 +41,7 @@ fleet 模式把「谁被允许访问」（控制面）和「开关防火墙端�
 | 能力 | 说明 |
 |------|------|
 | standalone 模式 | `serve`：nftables（带防护）或 ufw 后端；Web 管理台、CLI、HTTP API；管理员 TOTP；审计；在线备份 |
-| 可插拔后端 | `nftables`、`ufw`，以及只做控制面的 `none`；一个 hub 可以同时管理 nftables 与 ufw 节点 |
+| 可插拔后端 | `nftables`、`ufw`，以及只做控制面的 `none`；一个 hub 可以同时管理 nftables 与 ufw 节点；ufw 后端不改写主机自己的规则 |
 | hub 控制面 | 节点注册（`node-add`、`node-list`、`node-del`），组到节点端口的映射（`group-target`），按节点计算期望状态（`GET /api/v1/node/desired-state`） |
 | 节点认证 | 每个节点一个长期有效的 bearer token，hub 只保存其 SHA-256；删除节点即撤销 |
 | agent 拉取 | 出站 HTTPS，按固定间隔（默认 15 秒）全量拉取；可用 `--ca` 固定 hub 证书；不跟随重定向；非回环地址的明文 http 须显式允许 |
@@ -63,5 +63,4 @@ fleet 模式把「谁被允许访问」（控制面）和「开关防火墙端�
 - **更快的下发**：用长轮询等方式替代固定间隔的全量拉取。
 - **`restore` 命令**：从 `backup` 生成的快照恢复数据库。目前需要停服务后手动替换数据库文件。
 - **armv6/armv7 自升级**：`upgrade` 目前无法区分这两种 32 位 ARM，只能重新运行安装脚本或手动替换二进制。
-- **ufw 后端避让主机规则**：主机上已有来源、端口、协议完全相同的规则时不添加受管规则（UFW-OkBoy v2.4.0 已这样处理），避免 ufw 把手工规则改写为受管规则。
 - **hub 高可用（可选）**：多实例 hub 加外置数据库，只在规模或可用性要求需要时考虑。
