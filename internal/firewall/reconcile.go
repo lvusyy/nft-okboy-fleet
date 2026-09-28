@@ -1,5 +1,7 @@
 package firewall
 
+import "errors"
+
 // sameMatchMerger is implemented by a backend that keeps at most one rule per
 // match (ip, port, proto), whatever the comment: ufw rewrites the comment of the
 // existing rule instead of adding a second one. Two users behind one address,
@@ -57,6 +59,10 @@ func ReconcileAll(be FirewallBackend, desired []Rule) (added, removed int, err e
 		}
 		have[k] = true
 		if e := be.AddRule(d.IP, d.Port, d.User, d.Proto, d.Group); e != nil {
+			if errors.Is(e, ErrHostRule) {
+				covered[mk] = true // the host's own rule decides; not added, not a failure
+				continue
+			}
 			err = e
 			continue
 		}

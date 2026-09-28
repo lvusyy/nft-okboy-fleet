@@ -35,7 +35,10 @@ unshare --mount --net --fork bash -c '
   ip link set lo up
   cp -a /etc/ufw "$TMP/etc-ufw"
   mount --bind "$TMP/etc-ufw" /etc/ufw
-  export LANG=C LC_ALL=C
-  ufw --force enable >/dev/null
+  export LANG=C LC_ALL=C LANGUAGE=C
+  # ufw reports a failure when the kernel lacks an optional module (LOG, say)
+  # although the firewall is active: go by its status.
+  ufw --force enable >/dev/null 2>&1 || ufw status | grep -q "^Status: active" ||
+    { echo "ufw could not be enabled in the sandbox" >&2; exit 1; }
   "$BIN" -test.run TestUfwIntegration -test.v
 '

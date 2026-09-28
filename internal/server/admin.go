@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -164,18 +166,23 @@ func (s *Server) adminDeleteUser(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "User not found")
 		return
 	}
-	if target.CurrentIP != nil && *target.CurrentIP != "" {
-		groups, _ := s.db.GetUserGroups(userID, true)
-		for _, g := range groups {
-			_ = s.fw.RemoveRule(*target.CurrentIP, g.Port, target.Username, g.Proto, g.Name)
-		}
-	}
+	fwErr := s.fw.RemoveUserRules(target.Username)
 	if err := s.db.DeleteUser(userID); err != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
 	_ = s.db.LogAudit(user.Username, "user_del", strPtr(target.Username), nil)
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": userID})
+	resp := map[string]any{"ok": true, "deleted": userID}
+	if fwErr != nil {
+		resp["warning"] = fwRemovalWarning(fwErr)
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// fwRemovalWarning is the response warning for a user's rules that could not be
+// removed: the database change stands and Maintain removes them once it can.
+func fwRemovalWarning(err error) string {
+	return "firewall rule removal failed (" + err.Error() + ") — nft-okboy retries every 30 seconds; check the firewall if this persists"
 }
 
 // adminSetAdmin promotes/demotes a user's admin flag (admin + step-up). Mirrors
@@ -336,13 +343,16 @@ func (s *Server) adminRemoveMembership(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
+	var fwErr error
 	if target.CurrentIP != nil && *target.CurrentIP != "" {
-		_ = s.fw.RemoveRule(*target.CurrentIP, group.Port, target.Username, group.Proto, group.Name)
+		fwErr = s.fw.RemoveRule(*target.CurrentIP, group.Port, target.Username, group.Proto, group.Name)
 	}
 	_ = s.db.LogAudit(user.Username, "remove_membership", strPtr(target.Username), strPtr(group.Name))
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "user_id": target.ID, "group_id": group.ID,
-	})
+	resp := map[string]any{"ok": true, "user_id": target.ID, "group_id": group.ID}
+	if fwErr != nil {
+		resp["warning"] = fwRemovalWarning(fwErr)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // adminRevokeUser revokes a user's active access (admin + step-up): close their
@@ -375,18 +385,10 @@ func (s *Server) adminRevokeUser(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusNotFound, "User not found")
 		return
 	}
-	// Remove the user's open rules. revoke is a security op with NO self-heal (a
-	// cleared/rotated user won't knock again to trigger reconcile), so a removal
-	// failure leaves the old IP allowed until the cleanup timer — surface it.
-	var fwFailed []string
-	if target.CurrentIP != nil && *target.CurrentIP != "" {
-		groups, _ := s.db.GetUserGroups(userID, true)
-		for _, g := range groups {
-			if e := s.fw.RemoveRule(*target.CurrentIP, g.Port, target.Username, g.Proto, g.Name); e != nil {
-				fwFailed = append(fwFailed, g.Name)
-			}
-		}
-	}
+	// Remove all of the user's rules, at any address. A cleared/rotated user
+	// won't knock again to trigger reconcile, so a removal failure leaves the old
+	// IP allowed until Maintain (every 30 seconds) manages to remove it — surface it.
+	fwErr := s.fw.RemoveUserRules(target.Username)
 	if err := s.db.ClearUserState(userID); err != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
 		return
@@ -405,10 +407,9 @@ func (s *Server) adminRevokeUser(w http.ResponseWriter, r *http.Request) {
 	if newSecret != "" {
 		resp["secret"] = newSecret
 	}
-	if len(fwFailed) > 0 {
-		resp["warning"] = "firewall rule removal failed for groups: " + strings.Join(fwFailed, ", ") +
-			" — run 'nft-okboy cleanup' or check nftables"
-		_ = s.db.LogAudit(user.Username, "revoke_fw_error", strPtr(target.Username), strPtr(strings.Join(fwFailed, ",")))
+	if fwErr != nil {
+		resp["warning"] = fwRemovalWarning(fwErr)
+		_ = s.db.LogAudit(user.Username, "revoke_fw_error", strPtr(target.Username), strPtr(fwErr.Error()))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -556,9 +557,12 @@ func (s *Server) adminDeleteGroup(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
+	var fwErrs []error
 	for _, m := range members {
 		if m.CurrentIP != nil && *m.CurrentIP != "" {
-			_ = s.fw.RemoveRule(*m.CurrentIP, group.Port, m.Username, group.Proto, group.Name)
+			if e := s.fw.RemoveRule(*m.CurrentIP, group.Port, m.Username, group.Proto, group.Name); e != nil {
+				fwErrs = append(fwErrs, fmt.Errorf("%s: %w", m.Username, e))
+			}
 		}
 	}
 	if err := s.db.DeleteGroup(groupID); err != nil {
@@ -569,7 +573,11 @@ func (s *Server) adminDeleteGroup(w http.ResponseWriter, r *http.Request) {
 	if err := s.syncGuard(); err != nil { // the port is no longer managed by nft-okboy
 		log.Printf("firewall guard: %v", err)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": groupID})
+	resp := map[string]any{"ok": true, "deleted": groupID}
+	if err := errors.Join(fwErrs...); err != nil {
+		resp["warning"] = fwRemovalWarning(err)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // groupMembers returns the (username, current_ip) of every member of a group, for

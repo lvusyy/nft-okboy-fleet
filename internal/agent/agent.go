@@ -124,8 +124,10 @@ func step(ctx context.Context, be firewall.FirewallBackend, client *http.Client,
 	if errors.Is(err, errRevoked) {
 		// Fail closed: a node the hub no longer knows must not keep admitting
 		// anyone. The guard stays, so its ports end up closed.
+		// (A disabled ufw is reported once, like the revocation: the rules go
+		// in the first cycle after it is enabled.)
 		_, removed, rerr := Reconcile(be, nil)
-		if !st.revoked || removed > 0 || rerr != nil {
+		if !st.revoked || removed > 0 || (rerr != nil && !errors.Is(rerr, firewall.ErrInactive)) {
 			log.Printf("agent: %v — removed %d managed rule(s)%s", err, removed, errSuffix(rerr))
 		}
 		st.revoked = true
@@ -139,6 +141,8 @@ func step(ctx context.Context, be firewall.FirewallBackend, client *http.Client,
 	desired := filterAllowed(sanitize(dr.Rules), opts.AllowedPorts)
 	added, removed, rerr := Reconcile(be, desired)
 	switch {
+	case errors.Is(rerr, firewall.ErrInactive):
+		// ufw is disabled: EnsureBase already warned; nothing changes until it is enabled.
 	case rerr != nil:
 		log.Printf("agent: reconcile error (partial): %v", rerr)
 	case added > 0 || removed > 0:

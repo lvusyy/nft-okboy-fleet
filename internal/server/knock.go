@@ -1,9 +1,11 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 
 	"nft-okboy-fleet/internal/auth"
 	"nft-okboy-fleet/internal/db"
@@ -39,24 +41,28 @@ func portMap(groups []db.Group) map[string]firewall.PortProto {
 // there, so a knock that moved the user meanwhile is not undone). Enabling
 // re-applies ALL of the user's enabled groups: reconciling only the toggled one
 // would remove the rules of their other groups until their next knock.
-func (s *Server) setMembership(userID int64, group *db.Group, enabled bool) error {
+// A disabled group's rule the firewall does not let go of is returned as a
+// warning for the response (the database change stands; Maintain retries).
+func (s *Server) setMembership(userID int64, group *db.Group, enabled bool) (warning string, err error) {
 	s.fwMu.Lock()
 	defer s.fwMu.Unlock()
 	if err := s.db.SetMembershipEnabled(userID, group.ID, enabled); err != nil {
-		return err
+		return "", err
 	}
 	u, err := s.db.GetUser(userID)
 	if err != nil || u == nil || u.CurrentIP == nil || *u.CurrentIP == "" {
-		return nil
+		return "", nil
 	}
 	if !enabled {
-		_ = s.fw.RemoveRule(*u.CurrentIP, group.Port, u.Username, group.Proto, group.Name)
-		return nil
+		if e := s.fw.RemoveRule(*u.CurrentIP, group.Port, u.Username, group.Proto, group.Name); e != nil {
+			return fwRemovalWarning(e), nil
+		}
+		return "", nil
 	}
 	if groups, err := s.db.GetUserGroups(userID, true); err == nil {
-		_, _, _ = s.fw.Reconcile(u.Username, *u.CurrentIP, portMap(groups))
+		_, _, _, _ = s.fw.Reconcile(u.Username, *u.CurrentIP, portMap(groups))
 	}
-	return nil
+	return "", nil
 }
 
 // serveIndex serves the embedded single-file web client for "/" and "/static/...".
@@ -117,9 +123,26 @@ func (s *Server) knock(w http.ResponseWriter, r *http.Request) {
 	}
 	// Reconcile FIRST: align the firewall with the user's enabled groups in one
 	// numbered pass (adds client_ip rules, removes stale/cross-knock orphans).
-	if _, _, ferr := s.fw.Reconcile(username, clientIP, portMap(enabledGroups)); ferr != nil {
-		errJSON(w, http.StatusInternalServerError, "Firewall reconcile failed")
-		return
+	// A disabled ufw is not a failure: this host restricts nothing then and no
+	// rule of it is changed, but the knock is still recorded (a hub's nodes need
+	// it) and Maintain applies it here once ufw is enabled.
+	var warnings []string
+	_, _, denied, ferr := s.fw.Reconcile(username, clientIP, portMap(enabledGroups))
+	if ferr != nil {
+		if !errors.Is(ferr, firewall.ErrInactive) {
+			errJSON(w, http.StatusInternalServerError, "Firewall reconcile failed")
+			return
+		}
+		warnings = append(warnings, "The server's firewall (ufw) is not active.")
+	}
+	for _, name := range denied {
+		for _, g := range enabledGroups {
+			if g.Name == name {
+				warnings = append(warnings, fmt.Sprintf(
+					"Group %s (port %d/%s): a rule of the server's own firewall denies your address; knocking does not change it.",
+					g.Name, g.Port, g.Proto))
+			}
+		}
 	}
 
 	// Atomic state write: read prior IP and write current_ip+last_knock (+ an
@@ -134,12 +157,16 @@ func (s *Server) knock(w http.ResponseWriter, r *http.Request) {
 	// IP unchanged: reconcile refreshed the rules and the write bumped the
 	// timestamp — report a heartbeat.
 	if oldIP != nil && *oldIP == clientIP {
-		writeJSON(w, http.StatusOK, map[string]any{
+		resp := map[string]any{
 			"ok":      true,
 			"ip":      clientIP,
 			"changed": false,
 			"message": "IP unchanged, heartbeat recorded",
-		})
+		}
+		if len(warnings) > 0 {
+			resp["warning"] = strings.Join(warnings, " ")
+		}
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 
@@ -152,12 +179,11 @@ func (s *Server) knock(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Anomaly check (possible credential sharing) — optional "warning" field.
-	var warning string
 	if a := s.fw.CheckIPAnomaly(username, s.cfg.AnomalyWindow, s.cfg.AnomalyMaxChanges); a != nil {
-		warning = fmt.Sprintf(
+		warnings = append(warnings, fmt.Sprintf(
 			"Suspicious activity: %d IP changes from %d unique IPs in the last %d minutes. Possible credential sharing.",
 			a.Changes, a.UniqueIPs, s.cfg.AnomalyWindow/60,
-		)
+		))
 	}
 
 	groupNames := make([]string, 0, len(enabledGroups))
@@ -173,8 +199,8 @@ func (s *Server) knock(w http.ResponseWriter, r *http.Request) {
 		"groups":  groupNames,
 		"message": "Firewall rules updated",
 	}
-	if warning != "" {
-		resp["warning"] = warning
+	if len(warnings) > 0 {
+		resp["warning"] = strings.Join(warnings, " ")
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -343,16 +369,19 @@ func (s *Server) selfToggleMembership(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if e := s.setMembership(requester.ID, group, enabled); e != nil {
+	warning, e := s.setMembership(requester.ID, group, enabled)
+	if e != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
 
 	_ = s.db.LogAudit(username, "self_toggle_membership",
 		strPtr(fmt.Sprintf("%d/%d", requester.ID, groupID)), strPtr(fmt.Sprintf("enabled=%v", boolPy(enabled))))
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "group_id": groupID, "enabled": enabled,
-	})
+	resp := map[string]any{"ok": true, "group_id": groupID, "enabled": enabled}
+	if warning != "" {
+		resp["warning"] = warning
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // toggleMembership toggles a user's group membership and syncs UFW immediately.
@@ -442,16 +471,19 @@ func (s *Server) toggleMembership(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if e := s.setMembership(userID, group, enabled); e != nil {
+	warning, e := s.setMembership(userID, group, enabled)
+	if e != nil {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
 
 	_ = s.db.LogAudit(username, "toggle_membership",
 		strPtr(fmt.Sprintf("%d/%d", userID, groupID)), strPtr(fmt.Sprintf("enabled=%v", boolPy(enabled))))
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok": true, "user_id": userID, "group_id": groupID, "enabled": enabled,
-	})
+	resp := map[string]any{"ok": true, "user_id": userID, "group_id": groupID, "enabled": enabled}
+	if warning != "" {
+		resp["warning"] = warning
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // boolPy renders a Go bool as Python's str(bool) ("True"/"False") so audit-log

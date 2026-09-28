@@ -100,6 +100,132 @@ func TestKnockRefusesNonAddress(t *testing.T) {
 	}
 }
 
+// TestKnockWhileFirewallInactive: with ufw disabled no local rule changes, yet
+// the knock is recorded (a hub's nodes need it) with a warning, and Maintain
+// applies it once ufw is enabled.
+func TestKnockWhileFirewallInactive(t *testing.T) {
+	h := newHarness(t)
+	uid := h.user("alice", false)
+	gid, _ := h.d.CreateGroup("web", 8080, "tcp")
+	_ = h.d.AddMembership(uid, gid, true)
+
+	h.be.Inactive = true
+	for _, what := range []string{"first knock", "heartbeat"} {
+		w := h.do("POST", "/api/knock", "alice", "203.0.113.7", "")
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "not active") {
+			t.Fatalf("%s with ufw inactive: want 200 with a warning, got %d %s", what, w.Code, w.Body)
+		}
+	}
+	if u, _ := h.d.GetUser(uid); u.CurrentIP == nil || *u.CurrentIP != "203.0.113.7" {
+		t.Fatal("the knock must be recorded while ufw is inactive")
+	}
+	h.s.Maintain() // still inactive: nothing to do, nothing to log as a failure
+
+	h.be.Inactive = false
+	h.s.Maintain()
+	if got := h.groupRules(); len(got) != 1 || got["alice/web"] != "203.0.113.7" {
+		t.Fatalf("after ufw is enabled Maintain must apply the knock, got %v", got)
+	}
+	if w := h.do("POST", "/api/knock", "alice", "203.0.113.7", ""); strings.Contains(w.Body.String(), "warning") {
+		t.Fatalf("no warning once ufw is active: %s", w.Body)
+	}
+}
+
+// TestKnockReportsHostDeny: a rule of the host's own that denies the caller on a
+// group's port is left alone, and the knock says so instead of claiming the port.
+func TestKnockReportsHostDeny(t *testing.T) {
+	h := newHarness(t)
+	uid := h.user("alice", false)
+	ssh, _ := h.d.CreateGroup("ssh", 2222, "tcp")
+	web, _ := h.d.CreateGroup("web", 8080, "tcp")
+	_ = h.d.AddMembership(uid, ssh, true)
+	_ = h.d.AddMembership(uid, web, true)
+	h.be.HostRules = map[string]string{"203.0.113.7:2222/tcp": "DENY"}
+
+	w := h.do("POST", "/api/knock", "alice", "203.0.113.7", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "Group ssh (port 2222/tcp)") {
+		t.Fatalf("knock: want 200 with a warning about ssh, got %d %s", w.Code, w.Body)
+	}
+	if got := h.groupRules(); len(got) != 1 || got["alice/web"] != "203.0.113.7" {
+		t.Fatalf("only web may be opened, got %v", got)
+	}
+}
+
+// TestRevokeRemovesRulesAtAnyAddress: a revoke removes the user's rules at every
+// address, not only at the current one (a rule left at an earlier address would
+// stay open), and warns when the firewall refuses the change.
+func TestRevokeRemovesRulesAtAnyAddress(t *testing.T) {
+	h := newHarness(t)
+	h.user("root", true)
+	uid := h.user("alice", false)
+	gid, _ := h.d.CreateGroup("web", 8080, "tcp")
+	_ = h.d.AddMembership(uid, gid, true)
+	revoke := func() *httptest.ResponseRecorder {
+		return h.do("POST", fmt.Sprintf("/api/admin/users/%d/revoke", uid), "root", "203.0.113.1", `{"rotate_secret": false}`)
+	}
+
+	if w := h.do("POST", "/api/knock", "alice", "203.0.113.7", ""); w.Code != http.StatusOK {
+		t.Fatalf("knock: %d %s", w.Code, w.Body)
+	}
+	_ = h.be.AddRule("198.51.100.9", 8080, "alice", "tcp", "web") // left at an earlier address
+	if w := revoke(); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "warning") {
+		t.Fatalf("revoke: %d %s", w.Code, w.Body)
+	}
+	if got := h.groupRules(); len(got) != 0 {
+		t.Fatalf("a revoke must remove the user's rules at every address, left %v", got)
+	}
+
+	if w := h.do("POST", "/api/knock", "alice", "203.0.113.7", ""); w.Code != http.StatusOK {
+		t.Fatalf("knock: %d %s", w.Code, w.Body)
+	}
+	h.be.Inactive = true
+	if w := revoke(); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "firewall rule removal failed") {
+		t.Fatalf("revoke with ufw inactive: want 200 with a warning, got %d %s", w.Code, w.Body)
+	}
+}
+
+// TestDeleteGroupWarnsWhenRulesStay: a group deletion whose rules the firewall
+// does not let go of is reported, not passed off as done.
+func TestDeleteGroupWarnsWhenRulesStay(t *testing.T) {
+	h := newHarness(t)
+	h.user("root", true)
+	uid := h.user("alice", false)
+	gid, _ := h.d.CreateGroup("web", 8080, "tcp")
+	_ = h.d.AddMembership(uid, gid, true)
+	if w := h.do("POST", "/api/knock", "alice", "203.0.113.7", ""); w.Code != http.StatusOK {
+		t.Fatalf("knock: %d %s", w.Code, w.Body)
+	}
+	h.be.Inactive = true
+	w := h.do("DELETE", fmt.Sprintf("/api/admin/groups/%d", gid), "root", "203.0.113.1", "")
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "firewall rule removal failed") {
+		t.Fatalf("delete group with ufw inactive: want 200 with a warning, got %d %s", w.Code, w.Body)
+	}
+}
+
+// TestMembershipRemovalWarnsWhenRulesStay: taking a group away (disabling one's
+// own membership, an admin's removal) warns when the firewall keeps the rule.
+func TestMembershipRemovalWarnsWhenRulesStay(t *testing.T) {
+	h := newHarness(t)
+	h.user("root", true)
+	uid := h.user("alice", false)
+	web, _ := h.d.CreateGroup("web", 8080, "tcp")
+	pg, _ := h.d.CreateGroup("db", 5432, "tcp")
+	_ = h.d.AddMembership(uid, web, true)
+	_ = h.d.AddMembership(uid, pg, true)
+	if w := h.do("POST", "/api/knock", "alice", "203.0.113.7", ""); w.Code != http.StatusOK {
+		t.Fatalf("knock: %d %s", w.Code, w.Body)
+	}
+	h.be.Inactive = true
+	w := h.do("PATCH", fmt.Sprintf("/api/me/membership/%d", pg), "alice", "203.0.113.7", `{"enabled":false}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "firewall rule removal failed") {
+		t.Fatalf("disable own membership with ufw inactive: want 200 with a warning, got %d %s", w.Code, w.Body)
+	}
+	w = h.do("POST", "/api/admin/memberships/remove", "root", "203.0.113.1", `{"username":"alice","group_name":"web"}`)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "firewall rule removal failed") {
+		t.Fatalf("remove membership with ufw inactive: want 200 with a warning, got %d %s", w.Code, w.Body)
+	}
+}
+
 // TestEnableGroupKeepsOtherGroups: re-enabling one group must not close the
 // user's ports in their other enabled groups.
 func TestEnableGroupKeepsOtherGroups(t *testing.T) {

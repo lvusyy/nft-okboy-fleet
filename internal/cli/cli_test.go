@@ -2,6 +2,7 @@ package cli
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,7 +11,26 @@ import (
 
 	"nft-okboy-fleet/internal/config"
 	"nft-okboy-fleet/internal/db"
+	"nft-okboy-fleet/internal/firewall"
 )
+
+// TestFwFailed: a host rule deciding the access is no failure; anything else is
+// reported (the command's database change stands).
+func TestFwFailed(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{nil, false},
+		{&firewall.HostRuleError{Action: "DENY"}, false},
+		{firewall.ErrInactive, true},
+		{fmt.Errorf("remove web (22/tcp): %w", firewall.ErrInactive), true},
+	} {
+		if got := fwFailed(c.err, "remove", "web"); got != c.want {
+			t.Errorf("fwFailed(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}
 
 // TestParseFlagsAfterPositionals: flags work before or after positionals (the
 // documented `user-add alice --admin` form), and "--" ends flag parsing.
@@ -127,5 +147,60 @@ func TestPruneBackupsTightensAll(t *testing.T) {
 		if st.Mode().Perm() != 0o600 {
 			t.Fatalf("keep=%d: backup mode %v, want 0600", keep, st.Mode().Perm())
 		}
+	}
+}
+
+// TestRevokeWithoutFirewallProgram: a firewall that cannot be driven (no ufw on
+// PATH here) does not stop user-join, user-leave or a revoke: the state is
+// cleared and the secret rotated all the same.
+func TestRevokeWithoutFirewallProgram(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("other systems build only the mock backend")
+	}
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "t.db")
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("firewall_backend: ufw\ndb_path: "+dbPath+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d, err := db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.Init(); err != nil {
+		t.Fatal(err)
+	}
+	old := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	id, err := d.CreateUser("alice", old, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpdateKnockTime(id, "203.0.113.7"); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+
+	t.Setenv("PATH", dir)
+	if err := CmdGroupAdd(cfgPath, []string{"web", "8080"}); err != nil {
+		t.Fatalf("group-add: %v", err)
+	}
+	for _, c := range []struct {
+		name string
+		cmd  func(string, []string) error
+	}{{"user-join", CmdUserJoin}, {"user-leave", CmdUserLeave}} {
+		if err := c.cmd(cfgPath, []string{"alice", "web"}); err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+	}
+	if err := CmdRevoke(cfgPath, []string{"alice"}); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	d, err = db.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	if u, _ := d.GetUser(id); u == nil || u.CurrentIP != nil || u.Secret == old {
+		t.Fatalf("revoke must clear the state and rotate the secret, got %+v", u)
 	}
 }

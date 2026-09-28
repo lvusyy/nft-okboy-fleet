@@ -1,14 +1,17 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -305,6 +308,42 @@ func TestSaveGuardRetries(t *testing.T) {
 	loadGuard(opts, loaded)
 	if !st.saved || !reflect.DeepEqual(loaded.ports, ports) {
 		t.Fatalf("not retried: saved=%v, file holds %+v", st.saved, loaded.ports)
+	}
+}
+
+// TestStepWhileUfwInactive: a disabled ufw changes nothing and, for a revoked
+// node too, is not logged again every cycle; the first cycle after ufw is
+// enabled catches up.
+func TestStepWhileUfwInactive(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	ctx := context.Background()
+	be := firewall.NewMockBackend("nft-okboy")
+	be.Inactive = true
+	body := `{"ok":true,"rules":[{"ip":"203.0.113.10","port":18080,"proto":"tcp","user":"alice","group":"web"}]}`
+	url, client := hubStub(t, 200, body)
+	step(ctx, be, client, url, Options{}, &state{})
+
+	be.Inactive = false
+	step(ctx, be, client, url, Options{}, &state{})
+	if got := keyset(t, be); len(got) != 1 || !got["203.0.113.10|tcp|alice|web"] {
+		t.Fatalf("after ufw is enabled the rule must be applied, got %v", got)
+	}
+
+	be.Inactive = true
+	revURL, revClient := hubStub(t, 401, `{"ok":false,"error":"Invalid node token"}`)
+	st := &state{}
+	for i := 0; i < 3; i++ {
+		step(ctx, be, revClient, revURL, Options{}, st)
+	}
+	if n := strings.Count(buf.String(), "managed rule(s)"); n != 1 {
+		t.Fatalf("revoked node on a disabled ufw: logged %d times, want once:\n%s", n, buf.String())
+	}
+	be.Inactive = false
+	step(ctx, be, revClient, revURL, Options{}, st)
+	if len(keyset(t, be)) != 0 {
+		t.Fatal("once ufw is enabled, a revoked node must remove its allow rules")
 	}
 }
 

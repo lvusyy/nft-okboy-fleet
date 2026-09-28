@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"regexp"
@@ -54,6 +55,9 @@ type UfwBackend struct {
 	// warnedInactive: the "ufw is inactive" warning was logged (EnsureBase now
 	// runs on every agent cycle and server maintenance pass; say it once).
 	warnedInactive bool
+	// warnedHost: the (ip|port|proto) matches already reported as left to a host
+	// rule — every reconcile pass meets them again; say it once per match.
+	warnedHost map[string]bool
 }
 
 // lock serializes ufw access: in this process via mu, and across nft-okboy
@@ -89,15 +93,21 @@ func NewUfwBackend(cfg UfwConfig) (*UfwBackend, error) {
 	return &UfwBackend{cfg: cfg, ufwPath: path}, nil
 }
 
-// run executes `ufw <args...>` under a forced C locale (UFW's human-readable
-// `status` output is otherwise localizable, which would break parsing) and a
+// ufwEnv is the environment ufw runs in: the host's, with every locale variable
+// forced to C. ufw translates its status line ("Status: active"), and as a
+// Python program it takes the language from LANGUAGE before LC_ALL — so
+// LANG=C LC_ALL=C alone still let a host LANGUAGE=zh_CN translate it.
+func ufwEnv() []string {
+	return append(os.Environ(), "LANG=C", "LC_ALL=C", "LANGUAGE=C")
+}
+
+// run executes `ufw <args...>` under a forced C locale (see ufwEnv) and a
 // timeout. Returns stdout.
 func (u *UfwBackend) run(args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), ufwTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, u.ufwPath, args...)
-	// Force a stable, parseable locale regardless of the host's settings.
-	cmd.Env = append(os.Environ(), "LANG=C", "LC_ALL=C")
+	cmd.Env = ufwEnv()
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -144,6 +154,11 @@ func (u *UfwBackend) EnsureBase() error {
 //
 // UFW selects the IPv4/IPv6 rule family from the address itself, so no explicit
 // version branch is needed.
+//
+// ufw keeps one rule per source, port and protocol: adding ours over a host rule
+// with that match would rewrite the host rule instead — its comment (so a later
+// revoke deletes it as ours) and its action (a DENY would become an ALLOW). Such
+// a host rule is therefore left in charge: ErrHostRule, nothing added.
 func (u *UfwBackend) AddRule(ip string, port int, user, proto, group string) error {
 	unlock, lerr := u.lock()
 	if lerr != nil {
@@ -153,8 +168,26 @@ func (u *UfwBackend) AddRule(ip string, port int, user, proto, group string) err
 	if err := checkRule(ip, port, proto); err != nil {
 		return err
 	}
+	out, err := u.run("status", "numbered")
+	if err != nil {
+		return err
+	}
+	if ufwInactive(out) {
+		return ErrInactive
+	}
+	if action, ok := hostRuleFor(out, u.cfg.Prefix, ip, port, proto); ok {
+		key := fmt.Sprintf("%s|%d|%s", ip, port, proto)
+		if !u.warnedHost[key] {
+			if u.warnedHost == nil {
+				u.warnedHost = make(map[string]bool)
+			}
+			u.warnedHost[key] = true
+			log.Printf("ufw: the host's own rule (%s IN from %s to port %d/%s) decides this access; nft-okboy adds no rule over it", action, ip, port, proto)
+		}
+		return &HostRuleError{Action: action}
+	}
 	comment := commentFor(u.cfg.Prefix, user, group)
-	_, err := u.run("allow", "from", ip, "to", "any",
+	_, err = u.run("allow", "from", ip, "to", "any",
 		"port", strconv.Itoa(port), "proto", proto, "comment", comment)
 	return err
 }
@@ -258,12 +291,24 @@ type ufwLine struct {
 }
 
 // listManagedLines runs `ufw status numbered` and parses the managed rules.
+// An inactive ufw lists no rules although it keeps them saved (they come back
+// with `ufw enable`): that is ErrInactive, never "no rules" — a delete that
+// found nothing to delete would otherwise pass for done.
 func (u *UfwBackend) listManagedLines() ([]ufwLine, error) {
 	out, err := u.run("status", "numbered")
 	if err != nil {
 		return nil, err
 	}
+	if ufwInactive(out) {
+		return nil, ErrInactive
+	}
 	return parseUfwStatus(u.cfg.Prefix, out), nil
+}
+
+// ufwInactive reports whether `ufw status [numbered]` output (C locale) says
+// the firewall is disabled.
+func ufwInactive(output string) bool {
+	return strings.HasPrefix(strings.TrimSpace(output), "Status: inactive")
 }
 
 var (
@@ -271,7 +316,58 @@ var (
 	ufwNumRe = regexp.MustCompile(`^\s*\[\s*(\d+)\s*\]\s+(.*\S)\s*$`)
 	// "<port>/<proto> [(v6)] ALLOW IN <ip>" within the body (comment stripped).
 	ufwBodyRe = regexp.MustCompile(`^(\d+)/(\w+)(?:\s+\(v6\))?\s+ALLOW\s+IN\s+(\S+)`)
+	// "<port>/<proto> [(v6)] <ACTION> IN <source> [(log)|(log-all)]" as the whole
+	// body: a rule "from <source> to any port <port> proto <proto>" of any action,
+	// the only shape ufw merges one of our allow rules into. A destination
+	// address, an interface, a source port or no protocol makes it a different
+	// match (shown as "10.0.0.1 22/tcp", "22/tcp on eth0", "<source> 5555/tcp",
+	// "22"), which ufw keeps beside ours.
+	ufwMatchRe = regexp.MustCompile(`^(\d+)/(tcp|udp)(?:\s+\(v6\))?\s+(ALLOW|DENY|REJECT|LIMIT)\s+IN\s+(\S+)(?:\s+\(log(?:-all)?\))?$`)
 )
+
+// splitUfwComment splits a numbered-rule body into the rule and its "# comment".
+func splitUfwComment(body string) (rule, comment string) {
+	if i := strings.IndexByte(body, '#'); i >= 0 {
+		return strings.TrimRight(body[:i], " \t"), strings.TrimSpace(body[i+1:])
+	}
+	return body, ""
+}
+
+// hostRuleFor finds, in `ufw status numbered` output, a rule nft-okboy does not
+// manage with exactly the match of "from ip to any port <port> proto <proto>",
+// and returns its action. Rules of ours (those parseUfwStatus lists) are
+// skipped: ufw re-comments one of them for another user behind the same
+// address, which reconcile already expects. Anything else is the host's, even
+// with our prefix in its comment (nft-okboy only ever adds ALLOW rules).
+// An IPv4-mapped IPv6 source ("::ffff:192.0.2.1") is a separate IPv6 rule to
+// ufw, so it does not match the plain IPv4 address.
+func hostRuleFor(output, prefix, ip string, port int, proto string) (string, bool) {
+	want := net.ParseIP(ip)
+	if want == nil {
+		return "", false
+	}
+	wantV6 := strings.Contains(ip, ":")
+	for _, raw := range strings.Split(output, "\n") {
+		m := ufwNumRe.FindStringSubmatch(raw)
+		if m == nil {
+			continue
+		}
+		body, comment := splitUfwComment(m[2])
+		if strings.HasPrefix(comment, prefix+":") && ufwBodyRe.MatchString(body) {
+			continue
+		}
+		bm := ufwMatchRe.FindStringSubmatch(body)
+		if bm == nil || bm[1] != strconv.Itoa(port) || bm[2] != proto {
+			continue
+		}
+		src := net.ParseIP(bm[4])
+		if src == nil || !src.Equal(want) || strings.Contains(bm[4], ":") != wantV6 {
+			continue
+		}
+		return bm[3], true
+	}
+	return "", false
+}
 
 // parseUfwStatus extracts the nft-okboy-managed rules from `ufw status numbered`
 // output. It keeps only rules whose comment starts "<prefix>:"; anything that
@@ -288,13 +384,7 @@ func parseUfwStatus(prefix, output string) []ufwLine {
 		if err != nil {
 			continue
 		}
-		body := m[2]
-		// Split off the trailing "# comment".
-		comment := ""
-		if i := strings.IndexByte(body, '#'); i >= 0 {
-			comment = strings.TrimSpace(body[i+1:])
-			body = strings.TrimRight(body[:i], " \t")
-		}
+		body, comment := splitUfwComment(m[2])
 		if !strings.HasPrefix(comment, prefix+":") {
 			continue // not one of ours
 		}
