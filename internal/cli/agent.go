@@ -44,6 +44,11 @@ func CmdAgent(cfgPath, version string, args []string) error {
 	if *hub == "" || *token == "" {
 		return fmt.Errorf("usage: agent --hub <url> [--node <name>] [--interval 15] [--ca <pem> | --insecure] [--allow-ports 18080,443]  (token: $NFT_OKBOY_TOKEN or --token)")
 	}
+	// NFT_OKBOY_ALLOW_HTTP=1 (e.g. in agent.env) is the same opt-in as --allow-http,
+	// for deployments whose command line is fixed by a shipped unit or a manifest.
+	if os.Getenv("NFT_OKBOY_ALLOW_HTTP") == "1" {
+		*allowHTTP = true
+	}
 	if err := checkHubURL(*hub, *allowHTTP); err != nil {
 		return err
 	}

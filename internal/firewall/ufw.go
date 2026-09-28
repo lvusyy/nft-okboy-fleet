@@ -54,14 +54,19 @@ type UfwBackend struct {
 }
 
 // lock serializes ufw access: in this process via mu, and across nft-okboy
-// processes on the host via a flock on ufwLockPath. Call as `defer u.lock()()`.
-func (u *UfwBackend) lock() func() {
+// processes on the host via a flock on ufwLockPath. Without the host-wide lock
+// the operation fails rather than risk the numbered-delete race.
+func (u *UfwBackend) lock() (func(), error) {
 	u.mu.Lock()
-	unlock := lockFile(ufwLockPath)
+	unlock, err := lockFile(ufwLockPath)
+	if err != nil {
+		u.mu.Unlock()
+		return nil, fmt.Errorf("ufw: cannot take the host-wide lock %s (needed to change ufw rules safely): %w", ufwLockPath, err)
+	}
 	return func() {
 		unlock()
 		u.mu.Unlock()
-	}
+	}, nil
 }
 
 // NewUfwBackend resolves the `ufw` binary and applies config defaults. It does
@@ -106,7 +111,11 @@ func (u *UfwBackend) run(args ...string) (string, error) {
 // the default-incoming policy to DENY, which locks the operator out unless SSH
 // was allowed first (the installer handles that ordering).
 func (u *UfwBackend) EnsureBase() error {
-	defer u.lock()()
+	unlock, lerr := u.lock()
+	if lerr != nil {
+		return lerr
+	}
+	defer unlock()
 	out, err := u.run("status")
 	if err != nil {
 		return err
@@ -124,7 +133,11 @@ func (u *UfwBackend) EnsureBase() error {
 // UFW selects the IPv4/IPv6 rule family from the address itself, so no explicit
 // version branch is needed.
 func (u *UfwBackend) AddRule(ip string, port int, user, proto, group string) error {
-	defer u.lock()()
+	unlock, lerr := u.lock()
+	if lerr != nil {
+		return lerr
+	}
+	defer unlock()
 	if err := checkRule(ip, port, proto); err != nil {
 		return err
 	}
@@ -139,7 +152,11 @@ func (u *UfwBackend) AddRule(ip string, port int, user, proto, group string) err
 // the rule's CURRENT number, then `ufw --force delete <n>`. A miss is not an
 // error: the caller's reconcile re-adds anything still needed.
 func (u *UfwBackend) RemoveRule(ip string, port int, user, proto, group string) error {
-	defer u.lock()()
+	unlock, lerr := u.lock()
+	if lerr != nil {
+		return lerr
+	}
+	defer unlock()
 	want := commentFor(u.cfg.Prefix, user, group)
 	lines, err := u.listManagedLines()
 	if err != nil {
@@ -157,7 +174,11 @@ func (u *UfwBackend) RemoveRule(ip string, port int, user, proto, group string) 
 // recomputes each managed rule's handle, and deletes the match by its CURRENT
 // number — robust against UFW's number shifting. A miss is not an error.
 func (u *UfwBackend) DeleteByHandle(handle int64) error {
-	defer u.lock()()
+	unlock, lerr := u.lock()
+	if lerr != nil {
+		return lerr
+	}
+	defer unlock()
 	lines, err := u.listManagedLines()
 	if err != nil {
 		return err
@@ -180,7 +201,11 @@ func (u *UfwBackend) deleteNumber(num int) error {
 // ListUserRules returns every managed rule whose comment starts
 // "<prefix>:<user>:" in one `ufw status numbered` pass.
 func (u *UfwBackend) ListUserRules(user string) ([]Rule, error) {
-	defer u.lock()()
+	unlock, lerr := u.lock()
+	if lerr != nil {
+		return nil, lerr
+	}
+	defer unlock()
 	lines, err := u.listManagedLines()
 	if err != nil {
 		return nil, err
@@ -197,7 +222,11 @@ func (u *UfwBackend) ListUserRules(user string) ([]Rule, error) {
 
 // ListManaged returns every managed rule whose comment starts "<prefix>:".
 func (u *UfwBackend) ListManaged() ([]Rule, error) {
-	defer u.lock()()
+	unlock, lerr := u.lock()
+	if lerr != nil {
+		return nil, lerr
+	}
+	defer unlock()
 	lines, err := u.listManagedLines()
 	if err != nil {
 		return nil, err

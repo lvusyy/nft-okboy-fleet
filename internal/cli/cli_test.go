@@ -62,14 +62,15 @@ func TestCheckHubURL(t *testing.T) {
 	}
 }
 
-// TestSeedUsersFreshDBOnly: the config seed runs on an empty DB only (a deleted
+// TestSeedUsersFreshDBOnly: the config seed runs on a freshly created DB only (a deleted
 // user must not come back with its old secret), and skips placeholder secrets.
 func TestSeedUsersFreshDBOnly(t *testing.T) {
-	d, err := db.Open(filepath.Join(t.TempDir(), "t.db"))
+	path := filepath.Join(t.TempDir(), "t.db")
+	d, err := db.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer d.Close()
+	defer func() { d.Close() }()
 	if err := d.Init(); err != nil {
 		t.Fatal(err)
 	}
@@ -86,14 +87,19 @@ func TestSeedUsersFreshDBOnly(t *testing.T) {
 		t.Fatal("a placeholder secret must not be seeded")
 	}
 	u, _ := d.GetUserByUsername("alice")
-	if err := d.DeleteUser(u.ID); err != nil {
+	if err := d.DeleteUser(u.ID); err != nil { // no users left at all
 		t.Fatal(err)
 	}
-	if _, err := d.CreateUser("bob", long, false); err != nil {
+	d.Close()
+	d, err = db.Open(path) // the next start
+	if err != nil {
 		t.Fatal(err)
 	}
-	seedUsers(cfg, d) // DB no longer fresh
+	if err := d.Init(); err != nil {
+		t.Fatal(err)
+	}
+	seedUsers(cfg, d)
 	if u, _ := d.GetUserByUsername("alice"); u != nil {
-		t.Fatal("a deleted user must not be re-seeded")
+		t.Fatal("a deleted user must not be re-seeded, even into an empty users table")
 	}
 }

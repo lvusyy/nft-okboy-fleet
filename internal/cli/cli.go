@@ -89,16 +89,13 @@ func openDB(cfg *config.Config) (*db.DB, error) {
 const minSeedSecret = 32
 
 // seedUsers performs the one-time first-run seed of the config `users:` map into
-// the DB (mirrors the Python open_database bootstrap). It runs only while the DB
-// has no users at all — a fresh install — as config.example.yaml documents.
-// Seeding on every start instead would resurrect, with its old (possibly leaked)
-// config secret, any user an admin had deleted. Invalid names (SR-1) and short
-// secrets are skipped with a warning.
+// the DB (mirrors the Python open_database bootstrap). It runs only when Init has
+// just created the database — a fresh install — as config.example.yaml documents.
+// Seeding on later starts (even once every user has been deleted) would resurrect,
+// with its old (possibly leaked) config secret, a user an admin had removed.
+// Invalid names (SR-1) and short secrets are skipped with a warning.
 func seedUsers(cfg *config.Config, d *db.DB) {
-	if len(cfg.Users) == 0 {
-		return
-	}
-	if existing, err := d.ListUsers(); err != nil || len(existing) > 0 {
+	if len(cfg.Users) == 0 || !d.Fresh() {
 		return
 	}
 	for name, u := range cfg.Users {
@@ -873,6 +870,11 @@ func pruneBackups(dir string, keep int) {
 		return
 	}
 	sort.Strings(matches) // timestamped names sort chronologically
+	// Backups written by older versions may be world-readable; they hold the same
+	// plaintext secrets as the DB.
+	for _, m := range matches {
+		_ = os.Chmod(m, 0o600)
+	}
 	for _, old := range matches[:len(matches)-keep] {
 		if err := os.Remove(old); err == nil {
 			_ = os.Remove(old + ".sha256")

@@ -117,7 +117,7 @@ sudo systemctl enable --now nft-okboy-agent
 > 同一网络路径上的任何人都能冒充 hub、偷走节点 token、给节点下发规则。
 >
 > agent 只接受 `https://` 的 hub（本机回环地址除外）；hub 在可信的内网（如集群内部 Service）且只能走明文 http 时，
-> 需显式加 `--allow-http`。
+> 需显式加 `--allow-http`（或在 agent.env 里写 `NFT_OKBOY_ALLOW_HTTP=1`，不用改 unit）。
 
 ### 4) 客户端 knock（一次覆盖全队列）
 

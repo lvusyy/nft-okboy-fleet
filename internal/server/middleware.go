@@ -21,25 +21,21 @@ import (
 //     the real peer; the leftmost is client-supplied and spoofable), else peer.
 //   - if peer is NOT trusted: the peer IS the real client.
 //
-// A header value is used only if it is one IP literal, returned canonicalized;
-// anything else ("any", a CIDR, a hostname) yields the peer instead, which the
-// knock handler then refuses as a loopback address. The address ends up in a
-// firewall rule, where ufw would read "any" or "0.0.0.0/0" as "everyone".
+// A header value is used only if it is one IP literal, returned canonicalized.
+// A proxy header that is present but anything else ("any", a CIDR, a hostname)
+// yields "", which the knock handler refuses: the address ends up in a firewall
+// rule, where ufw would read "any" or "0.0.0.0/0" as "everyone" — and falling
+// back to the peer would allowlist the proxy itself when it is not on loopback.
 func (s *Server) clientIP(r *http.Request) string {
 	peer := hostOnly(r.RemoteAddr)
 
 	if s.isTrustedProxy(peer) {
 		if xri := strings.TrimSpace(r.Header.Get("X-Real-IP")); xri != "" {
-			if ip := firewall.CanonicalIP(xri); ip != "" {
-				return ip
-			}
-			return peer
+			return firewall.CanonicalIP(xri)
 		}
 		if xff := r.Header.Get("X-Forwarded-For"); strings.TrimSpace(xff) != "" {
 			parts := strings.Split(xff, ",")
-			if ip := firewall.CanonicalIP(parts[len(parts)-1]); ip != "" {
-				return ip
-			}
+			return firewall.CanonicalIP(parts[len(parts)-1])
 		}
 		return peer
 	}

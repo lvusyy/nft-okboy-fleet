@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -22,6 +23,8 @@ import (
 type DB struct {
 	sql  *sql.DB
 	path string
+	// fresh: Init had to create the users table, i.e. this DB is brand new.
+	fresh bool
 }
 
 type scanner interface{ Scan(...any) error }
@@ -30,9 +33,11 @@ type scanner interface{ Scan(...any) error }
 //
 // The DB holds every user's HMAC secret and TOTP seed in plaintext (both must be
 // usable server-side), so it is owner-only: new parent dirs are 0700 and the DB
-// file (plus any -wal/-shm) is forced to 0600 on every open — SQLite itself would
+// file (plus any -wal/-shm) is set to 0600 on every open — SQLite itself would
 // create it 0644 under the usual umask, readable by every local user wherever
-// db_path does not sit inside the installer's 0700 data dir.
+// db_path does not sit inside the installer's 0700 data dir. Failing to change
+// the mode (a file owned by another user, a filesystem without modes) is logged,
+// not fatal.
 func Open(path string) (*DB, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -49,8 +54,7 @@ func Open(path string) (*DB, error) {
 	}
 	for _, f := range []string{path, path + "-wal", path + "-shm"} {
 		if err := os.Chmod(f, 0o600); err != nil && !os.IsNotExist(err) {
-			sdb.Close()
-			return nil, fmt.Errorf("restrict permissions of %s: %w", f, err)
+			log.Printf("warning: could not restrict %s to owner-only (it holds plaintext secrets): %v", f, err)
 		}
 	}
 	return &DB{sql: sdb, path: path}, nil
@@ -60,6 +64,10 @@ func Open(path string) (*DB, error) {
 func (d *DB) Conn() *sql.DB { return d.sql }
 func (d *DB) Close() error  { return d.sql.Close() }
 func (d *DB) Path() string  { return d.path }
+
+// Fresh reports whether Init created this database (it had no users table): the
+// one moment a first-run seed may add users.
+func (d *DB) Fresh() bool { return d.fresh }
 
 // Init creates any missing tables, runs pending migrations, and ensures indexes.
 func (d *DB) Init() error {
@@ -73,6 +81,9 @@ func (d *DB) Init() error {
 		}
 		if _, err := d.sql.Exec(schemaDDL[name]); err != nil {
 			return fmt.Errorf("create table %s: %w", name, err)
+		}
+		if name == "users" {
+			d.fresh = true
 		}
 	}
 	if _, err := d.RunMigrations(); err != nil {
@@ -623,17 +634,21 @@ func (d *DB) GetRecentIPChangeIPs(username string, windowSec int) ([]string, err
 
 // Backup writes a consistent snapshot via VACUUM INTO (safe under WAL) and a
 // sidecar .sha256 checksum, returning the hex digest. The snapshot carries the
-// same plaintext secrets as the DB, so it is owner-only too (see Open).
+// same plaintext secrets as the DB, so it is owner-only too (see Open): the file
+// is created empty with mode 0600 BEFORE VACUUM INTO fills it (which SQLite
+// allows), so it is never readable by others, not even while being written.
 func (d *DB) Backup(dest string) (string, error) {
 	if dir := filepath.Dir(dest); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", err
 		}
 	}
-	if _, err := d.sql.Exec(`VACUUM INTO ?`, dest); err != nil {
+	empty, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
 		return "", err
 	}
-	if err := os.Chmod(dest, 0o600); err != nil {
+	empty.Close()
+	if _, err := d.sql.Exec(`VACUUM INTO ?`, dest); err != nil {
 		return "", err
 	}
 	f, err := os.Open(dest)

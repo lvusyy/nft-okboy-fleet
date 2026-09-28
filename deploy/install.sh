@@ -9,9 +9,9 @@
 # Env knobs:  NFT_OKBOY_VERSION=v0.2.0  (pin a version)   NO_COLOR=1  (plain output)
 #             NFT_OKBOY_SHA256=<hex>    (the binary's sha256 from the release page, when
 #                                        GitHub cannot be reached to look it up)
-#             NFT_OKBOY_GH_MIRROR=<url> (also fetch checksums, config and unit through this
-#                                        mirror when GitHub is unreachable — only for a mirror
-#                                        you trust as much as GitHub itself)
+#             NFT_OKBOY_GH_MIRROR=<url> (https:// only; a mirror you trust as much as GitHub
+#                                        itself — used for the version, checksums, config and
+#                                        unit when GitHub is unreachable)
 set -eu
 
 REPO="lvusyy/nft-okboy-fleet"
@@ -53,30 +53,25 @@ for t in curl install sha256sum systemctl; do
 done
 command -v nft >/dev/null 2>&1 || warn "nft (nftables) is not installed — install it before starting nft-okboy."
 
-# ---- resolve version (latest release, or NFT_OKBOY_VERSION) ----
-VER="${NFT_OKBOY_VERSION:-}"
-if [ -z "$VER" ]; then
-  # Resolve the latest tag from the releases/latest redirect (not the GitHub API),
-  # so it works through the SAME CN-friendly mirrors as the downloads — the API host
-  # is often blocked on networks where the mirror still serves.
-  say "Resolving latest release…"
-  for pre in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
-    VER=$(curl -fsSL --connect-timeout 8 --max-time 25 -o /dev/null -w '%{url_effective}' \
-          "${pre}https://github.com/$REPO/releases/latest" 2>/dev/null | sed -n 's#.*/tag/##p')
-    [ -n "$VER" ] && break
-  done
-  [ -n "$VER" ] || die "Could not resolve the latest release. Set NFT_OKBOY_VERSION=vX.Y.Z and retry."
-fi
+# ---- a mirror you trust (optional) ----
+# NFT_OKBOY_GH_MIRROR is a mirror you trust as much as GitHub itself: it may stand
+# in for GitHub for everything, including the version, checksum, config and unit.
+GH_MIRROR="${NFT_OKBOY_GH_MIRROR:-}"
+case "$GH_MIRROR" in
+  ""|https://*) ;;
+  *) die "NFT_OKBOY_GH_MIRROR must be an https:// URL prefix, e.g. https://ghfast.top/" ;;
+esac
 
 # ---- download helpers ----
-# dl: the release BINARY only — try direct, then CN-friendly mirrors. A mirror is
-# just a transport here: the bytes must match the checksum taken from GitHub below.
+# dl: the release BINARY only — direct, then your mirror, then CN-friendly public
+# mirrors. A mirror is just a transport here: the bytes must match the checksum
+# taken from GitHub below.
 # curl gets a connect timeout AND a stall guard (--speed-limit/--speed-time): the
 # GitHub release CDN can connect then reset mid-transfer, which would hang a plain
 # `curl` forever and never fail over to a mirror. Abort a transfer that drops below
 # 1 KB/s for 20s so the next mirror is tried.
 dl() { # dl <github-url> <out>
-  for pre in "" "https://ghfast.top/" "https://gh-proxy.com/"; do
+  for pre in "" ${GH_MIRROR:+"$GH_MIRROR"} "https://ghfast.top/" "https://gh-proxy.com/"; do
     if curl -fsSL --connect-timeout 8 --speed-limit 1024 --speed-time 20 --max-time 600 \
         "$pre$1" -o "$2" 2>/dev/null; then
       return 0
@@ -84,15 +79,46 @@ dl() { # dl <github-url> <out>
   done
   return 1
 }
-# dl_gh: everything that vouches for the binary or runs as root without being
-# covered by its checksum (SHA256SUMS, config, systemd unit) comes from GitHub
-# itself — a mirror able to tamper with the binary could tamper with these too.
-# NFT_OKBOY_GH_MIRROR opts in to one mirror you trust, as a fallback.
+# dl_gh: everything that decides WHAT gets installed, or runs as root without being
+# covered by the binary's checksum (SHA256SUMS, config, systemd unit), comes from
+# GitHub itself, else only from NFT_OKBOY_GH_MIRROR — never from the public mirrors,
+# which could tamper with these as easily as with the binary. HTTPS only, redirects
+# included.
 dl_gh() { # dl_gh <github-url> <out>
-  curl -fsSL --connect-timeout 8 --max-time 60 "$1" -o "$2" 2>/dev/null && return 0
-  [ -n "${NFT_OKBOY_GH_MIRROR:-}" ] &&
-    curl -fsSL --connect-timeout 8 --max-time 60 "$NFT_OKBOY_GH_MIRROR$1" -o "$2" 2>/dev/null
+  curl -fsSL --proto =https --proto-redir =https --connect-timeout 8 --max-time 60 "$1" -o "$2" 2>/dev/null && return 0
+  [ -n "$GH_MIRROR" ] &&
+    curl -fsSL --proto =https --proto-redir =https --connect-timeout 8 --max-time 60 "$GH_MIRROR$1" -o "$2" 2>/dev/null
 }
+
+# ---- resolve version (latest release, or NFT_OKBOY_VERSION) ----
+# From GitHub's API, else its releases/latest redirect, else (only if set) your
+# mirror: a public mirror could otherwise pick an OLD release, whose genuine
+# checksum would then verify just fine.
+latest_tag() {
+  curl -fsSL --proto =https --connect-timeout 8 --max-time 25 -H 'Accept: application/vnd.github+json' \
+      "https://api.github.com/repos/$REPO/releases/latest" 2>/dev/null |
+    tr ',' '\n' | sed -n 's/^[{[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
+}
+latest_tag_via() { # latest_tag_via <mirror-prefix or "">: from the releases/latest redirect
+  curl -fsSL --proto =https --proto-redir =https --connect-timeout 8 --max-time 25 -o /dev/null \
+      -w '%{url_effective}' "${1}https://github.com/$REPO/releases/latest" 2>/dev/null | sed -n 's#.*/tag/##p'
+}
+VER="${NFT_OKBOY_VERSION:-}"
+if [ -z "$VER" ]; then
+  say "Resolving latest release…"
+  VER=$(latest_tag)
+  [ -n "$VER" ] || VER=$(latest_tag_via "")
+  [ -n "$VER" ] || [ -z "$GH_MIRROR" ] || VER=$(latest_tag_via "$GH_MIRROR")
+  [ -n "$VER" ] || die "Could not resolve the latest release from GitHub. Set NFT_OKBOY_VERSION=vX.Y.Z and retry."
+fi
+# The tag goes into every URL below: accept only a plain release tag.
+case "$VER" in
+  v[0-9]*) ;;
+  *) die "Unexpected release tag \"$VER\"." ;;
+esac
+case "$VER" in
+  *[!A-Za-z0-9._-]*) die "Unexpected release tag \"$VER\"." ;;
+esac
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -105,7 +131,7 @@ EXP=$(printf '%s' "${NFT_OKBOY_SHA256:-}" | tr 'A-F' 'a-f')
 if [ -z "$EXP" ]; then
   # The API answers compact JSON; one field per line is enough to pair each asset
   # "name" with the "digest" that follows it in the same asset object.
-  EXP=$(curl -fsSL --connect-timeout 8 --max-time 25 -H 'Accept: application/vnd.github+json' \
+  EXP=$(curl -fsSL --proto =https --connect-timeout 8 --max-time 25 -H 'Accept: application/vnd.github+json' \
           "https://api.github.com/repos/$REPO/releases/tags/$VER" 2>/dev/null |
         tr ',{}' '\n\n\n' |
         awk -v want="$ASSET" '

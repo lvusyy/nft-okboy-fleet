@@ -1349,11 +1349,12 @@ function forgetCredentials() {
   clearVault();
 }
 
-// The login form keeps whatever was typed or auto-filled from storage; wipe the
-// secret (and PIN) so it cannot be reused by whoever sits at the browser next.
+// The login and unlock forms keep whatever was typed or auto-filled; wipe the
+// secret and PINs so they cannot be reused by whoever sits at the browser next.
 function clearLoginSecret() {
   fSecret.value = "";
   fLoginPin.value = "";
+  fPin.value = "";
 }
 
 let pendingPin = null; // PIN captured at login, used to encrypt vault
@@ -1490,6 +1491,7 @@ pinForm.addEventListener("submit", async (e) => {
     return;
   }
   pinAttempts = 0;
+  fPin.value = ""; // else Lock -> Admin -> Unlock would not need the PIN again
   pinView.hidden = true;
   loginView.hidden = false;
   fUser.value = data.username;
