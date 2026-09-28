@@ -164,8 +164,9 @@ Global flags:
 
 Commands:
   serve [--debug]                 Start the API server (hub / standalone)
-  agent --hub <url> --token <tok> [--node <name>] [--interval 15] [--insecure]
-                                  Run as an edge agent (pull desired state, apply locally)
+  agent --hub <url> [--node <name>] [--interval 15] [--ca <pem> | --insecure]
+                                  Run as an edge agent (pull desired state, apply locally);
+                                  the node token comes from $NFT_OKBOY_TOKEN (or --token)
   gen-secret [username]           Generate a fresh user secret
   user-add <name> [--admin]       Create a user (prints the secret)
   user-del <name>                 Delete a user + clean firewall rules
@@ -191,7 +192,7 @@ Commands:
   totp-uri <user>                 Print an otpauth:// URI for a user's TOTP secret
   upgrade [--check] [--version vX.Y.Z]
                                   Self-update to the latest release (backs up the
-                                  DB, verifies sha256, restarts the service)
+                                  DB, verifies sha256 against GitHub, restarts the service)
   version                         Print version and exit
 `)
 }

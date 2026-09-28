@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,21 +23,24 @@ import (
 // upgradeRepo is the GitHub repo whose Releases host the prebuilt binaries.
 const upgradeRepo = "lvusyy/nft-okboy-fleet"
 
-// ghMirrors are tried in order for every GitHub download so the upgrade works
-// from networks where github.com is slow/blocked. "" is the direct path; the
-// rest are public CN-friendly reverse proxies (see ghproxy.link for live ones).
+// ghMirrors are tried in order for the release binary download so the upgrade
+// works from networks where github.com is slow/blocked. "" is the direct path;
+// the rest are public CN-friendly reverse proxies (see ghproxy.link for live
+// ones). A mirror is only a transport: what it serves must match the checksum
+// fetched from GitHub itself (trustedDigest), never a checksum from a mirror.
 var ghMirrors = []string{"", "https://ghfast.top/", "https://gh-proxy.com/"}
 
 // CmdUpgrade self-updates the running nft-okboy binary to the latest GitHub release
 // (or a pinned --version). It is the day-2 counterpart of deploy/install.sh:
 //
-//  1. resolve the target tag (latest release, or --version);
-//  2. back up the DB first — a newer binary may migrate the schema forward, so a
+//  1. resolve the target release (latest, or --version) from the GitHub API;
+//  2. obtain the asset's sha256 from GitHub itself and refuse to go on without it;
+//  3. back up the DB — a newer binary may migrate the schema forward, so a
 //     rollback needs the pre-upgrade copy;
-//  3. download the release asset + its .sha256 (mirror fallback) and verify;
-//  4. atomically swap the running binary, keeping <exe>.bak;
-//  5. health-check the new binary and roll back on failure;
-//  6. restart the systemd service (best-effort, only if managed by systemd).
+//  4. download the release asset (mirror fallback) and check it against (2);
+//  5. atomically swap the running binary, keeping <exe>.bak;
+//  6. health-check the new binary and roll back on failure;
+//  7. restart the systemd service (best-effort, only if managed by systemd).
 //
 // Only linux/amd64 has published binaries; other platforms must build from source.
 func CmdUpgrade(cfgPath, version string, args []string) error {
@@ -46,7 +50,7 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 	noRestart := fs.Bool("no-restart", false, "Do not restart the service after upgrading")
 	noBackup := fs.Bool("no-backup", false, "Skip the DB backup (use on agent nodes, which hold no DB)")
 	service := fs.String("service", "nft-okboy", "systemd unit to restart after upgrade (use nft-okboy-agent on an agent node)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 
@@ -56,13 +60,16 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 			runtime.GOOS, runtime.GOARCH)
 	}
 
+	// One API call resolves the tag (when not pinned) and carries the checksums
+	// GitHub computed for the release assets. With a pinned --version an API
+	// failure is not fatal yet: trustedDigest can still use SHA256SUMS.
+	rel, relErr := fetchRelease(upgradeRepo, *target)
 	want := *target
 	if want == "" {
-		latest, err := latestReleaseTag(upgradeRepo)
-		if err != nil {
-			return fmt.Errorf("resolve latest release: %w (or pass --version vX.Y.Z)", err)
+		if relErr != nil {
+			return fmt.Errorf("resolve latest release: %w (or pass --version vX.Y.Z)", relErr)
 		}
-		want = latest
+		want = rel.TagName
 	}
 	fmt.Printf("Current: %s   Target: %s\n", displayVersion(version), want)
 
@@ -92,6 +99,14 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 		exe = resolved
 	}
 
+	// The checksum must come from GitHub itself: a mirror that can serve a
+	// tampered binary can serve a matching checksum just as easily. No trusted
+	// checksum, no upgrade — the next (timer) run simply tries again.
+	digest, err := trustedDigest(rel, upgradeRepo, want, asset)
+	if err != nil {
+		return fmt.Errorf("cannot verify %s %s: %w; not upgrading", asset, want, err)
+	}
+
 	// DB backup before any swap (rollback safety for forward migrations). Reuses
 	// CmdBackup so retention/checksum behave identically to a manual backup. Agent
 	// nodes hold no DB, so --no-backup skips this (and avoids creating an empty one).
@@ -107,7 +122,7 @@ func CmdUpgrade(cfgPath, version string, args []string) error {
 	if err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
-	if verr := verifyChecksum(upgradeRepo, want, asset, data); verr != nil {
+	if verr := checkDigest(asset, data, digest); verr != nil {
 		return verr
 	}
 
@@ -190,33 +205,47 @@ func httpClient() *http.Client {
 	}
 }
 
-// latestReleaseTag resolves the newest release tag via the GitHub API.
-func latestReleaseTag(repo string) (string, error) {
-	req, err := http.NewRequest(http.MethodGet,
-		"https://api.github.com/repos/"+repo+"/releases/latest", nil)
+// release is the part of a GitHub release API object the upgrade needs.
+type release struct {
+	TagName string         `json:"tag_name"`
+	Assets  []releaseAsset `json:"assets"`
+}
+
+type releaseAsset struct {
+	Name   string `json:"name"`
+	Digest string `json:"digest"` // "sha256:<hex>", computed by GitHub at upload
+}
+
+// fetchRelease reads a release from the GitHub API: the latest when tag is "",
+// else the one tagged tag. The API is always contacted directly, never through
+// a mirror — it is the trust anchor for the tag and the asset checksums.
+func fetchRelease(repo, tag string) (*release, error) {
+	u := "https://api.github.com/repos/" + repo + "/releases/latest"
+	if tag != "" {
+		u = "https://api.github.com/repos/" + repo + "/releases/tags/" + url.PathEscape(tag)
+	}
+	req, err := http.NewRequest(http.MethodGet, u, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	req.Header.Set("User-Agent", "nft-okboy-upgrade")
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := httpClient().Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("github api returned %d", resp.StatusCode)
+		return nil, fmt.Errorf("github api returned %d", resp.StatusCode)
 	}
-	var r struct {
-		TagName string `json:"tag_name"`
-	}
+	var r release
 	if derr := json.NewDecoder(resp.Body).Decode(&r); derr != nil {
-		return "", derr
+		return nil, derr
 	}
 	if r.TagName == "" {
-		return "", fmt.Errorf("empty tag_name in release response")
+		return nil, fmt.Errorf("empty tag_name in release response")
 	}
-	return r.TagName, nil
+	return &r, nil
 }
 
 // ghDownload fetches a release asset, trying each mirror prefix until one serves
@@ -312,30 +341,54 @@ func assetForHost() string {
 	}
 }
 
-// verifyChecksum downloads the release's combined SHA256SUMS file and checks data
-// against the line for asset. A missing SHA256SUMS is a warning, not a hard fail.
-func verifyChecksum(repo, tag, asset string, data []byte) error {
-	sums, err := ghDownload(repo, tag, "SHA256SUMS")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "warning: no published SHA256SUMS; skipping verification")
-		return nil
-	}
-	want := ""
-	for _, line := range strings.Split(string(sums), "\n") {
-		if f := strings.Fields(line); len(f) == 2 && f[1] == asset { // "<hex>  <file>"
-			want = f[0]
-			break
+// trustedDigest returns the expected sha256 (lowercase hex) of asset in release
+// tag, taken only from GitHub itself: the digest the release API reports for the
+// asset (rel, when the API answered), else the release's SHA256SUMS downloaded
+// directly from github.com. Mirrors are never consulted — whoever serves the
+// binary must not also be the one vouching for it.
+func trustedDigest(rel *release, repo, tag, asset string) (string, error) {
+	if rel != nil {
+		for _, a := range rel.Assets {
+			if h, ok := strings.CutPrefix(a.Digest, "sha256:"); ok && a.Name == asset && isSHA256Hex(h) {
+				return strings.ToLower(h), nil
+			}
 		}
 	}
-	if want == "" {
-		return fmt.Errorf("SHA256SUMS has no entry for %s — aborting", asset)
+	sums, err := ghGet(fmt.Sprintf("https://github.com/%s/releases/download/%s/SHA256SUMS", repo, tag))
+	if err != nil {
+		return "", fmt.Errorf("no checksum from the GitHub API, and SHA256SUMS is unavailable from github.com: %w", err)
 	}
+	return digestFromSums(sums, asset)
+}
+
+// digestFromSums finds asset's checksum in a sha256sum-format manifest.
+func digestFromSums(sums []byte, asset string) (string, error) {
+	for _, line := range strings.Split(string(sums), "\n") {
+		// "<hex>  <file>" (or "<hex> *<file>" from sha256sum -b)
+		if f := strings.Fields(line); len(f) == 2 && strings.TrimPrefix(f[1], "*") == asset && isSHA256Hex(f[0]) {
+			return strings.ToLower(f[0]), nil
+		}
+	}
+	return "", fmt.Errorf("SHA256SUMS has no entry for %s", asset)
+}
+
+// checkDigest compares data against the trusted sha256 from trustedDigest.
+func checkDigest(asset string, data []byte, want string) error {
 	sum := sha256.Sum256(data)
-	if !strings.EqualFold(want, hex.EncodeToString(sum[:])) {
-		return fmt.Errorf("checksum mismatch for %s — aborting", asset)
+	if hex.EncodeToString(sum[:]) != want {
+		return fmt.Errorf("checksum mismatch for %s: the download does not match the checksum GitHub publishes — aborting", asset)
 	}
-	fmt.Println("Checksum verified.")
+	fmt.Println("Checksum verified against GitHub.")
 	return nil
+}
+
+// isSHA256Hex reports whether s is a 64-character hex string.
+func isSHA256Hex(s string) bool {
+	if len(s) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
 }
 
 // copyFile copies src to dst with the given mode (used for the rollback .bak).

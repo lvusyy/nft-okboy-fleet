@@ -15,7 +15,13 @@
 // different protos (22/tcp vs 22/udp) — exactly what Manager.Reconcile exercises.
 package firewall
 
-import "testing"
+import (
+	"fmt"
+	"os/exec"
+	"strings"
+	"sync"
+	"testing"
+)
 
 func TestUfwIntegration(t *testing.T) {
 	const prefix = "okboy-it"
@@ -115,4 +121,58 @@ func TestUfwIntegration(t *testing.T) {
 		t.Fatalf("ListManaged want 2, got %d: %+v", len(all), all)
 	}
 	t.Logf("real ufw validated: add / list(handle) / precise cross-group delete / DeleteByHandle / ipv6 / listmanaged — %d managed rules", len(all))
+}
+
+// TestUfwIntegrationConcurrentDeletes: ufw deletes by rule NUMBER, which shifts
+// after every delete, so concurrent list-then-delete sequences must not
+// interleave — else one resolves a number, another delete shifts a different
+// rule into it, and a host rule is removed. Managed rules are interleaved with
+// host rules and deleted from many goroutines at once; every host rule survives.
+func TestUfwIntegrationConcurrentDeletes(t *testing.T) {
+	be, err := NewUfwBackend(UfwConfig{Prefix: "okboy-race"})
+	if err != nil {
+		t.Fatalf("NewUfwBackend: %v", err)
+	}
+	spec := func(i int) []string { // a host rule nft-okboy does not manage
+		return []string{"allow", "from", "192.0.2.200", "to", "any", "port", fmt.Sprint(2200 + i), "proto", "tcp"}
+	}
+	const n = 6
+	t.Cleanup(func() {
+		for i := 0; i < n; i++ {
+			_ = exec.Command("ufw", append([]string{"delete"}, spec(i)...)...).Run()
+		}
+	})
+	for i := 0; i < n; i++ {
+		if out, err := exec.Command("ufw", append(spec(i), "comment", "host-rule")...).CombinedOutput(); err != nil {
+			t.Fatalf("host rule: %v: %s", err, out)
+		}
+		if err := be.AddRule(fmt.Sprintf("198.51.100.%d", i+1), 3000+i, fmt.Sprintf("u%d", i), "tcp", "g"); err != nil {
+			t.Fatalf("AddRule: %v", err)
+		}
+	}
+	managed, err := be.ListManaged()
+	if err != nil || len(managed) != n {
+		t.Fatalf("want %d managed rules, got %d (%v)", n, len(managed), err)
+	}
+	var wg sync.WaitGroup
+	for _, r := range managed {
+		wg.Add(1)
+		go func(h int64) {
+			defer wg.Done()
+			if err := be.DeleteByHandle(h); err != nil {
+				t.Errorf("DeleteByHandle: %v", err)
+			}
+		}(r.Handle)
+	}
+	wg.Wait()
+	if left, _ := be.ListManaged(); len(left) != 0 {
+		t.Fatalf("managed rules left behind: %+v", left)
+	}
+	out, err := exec.Command("ufw", "status").Output()
+	if err != nil {
+		t.Fatalf("ufw status: %v", err)
+	}
+	if got := strings.Count(string(out), "# host-rule"); got != n {
+		t.Fatalf("host rules: want %d intact, got %d; ufw status:\n%s", n, got, out)
+	}
 }

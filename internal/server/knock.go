@@ -2,9 +2,11 @@ package server
 
 import (
 	"fmt"
+	"net"
 	"net/http"
 
 	"nft-okboy-fleet/internal/auth"
+	"nft-okboy-fleet/internal/db"
 	"nft-okboy-fleet/internal/firewall"
 	"nft-okboy-fleet/internal/static"
 )
@@ -19,6 +21,28 @@ func (s *Server) authUser(w http.ResponseWriter, r *http.Request) (string, bool)
 		return "", false
 	}
 	return username, true
+}
+
+// portMap maps each group to its port/proto — the enabled-group set Reconcile
+// takes. Reconcile removes every rule of the user whose group is missing from
+// it, so callers must pass ALL of the user's enabled groups.
+func portMap(groups []db.Group) map[string]firewall.PortProto {
+	m := make(map[string]firewall.PortProto, len(groups))
+	for _, g := range groups {
+		m[g.Name] = firewall.PortProto{Port: g.Port, Proto: g.Proto}
+	}
+	return m
+}
+
+// syncEnabled re-applies ALL of user's enabled groups at ip. Used after a group
+// is (re-)enabled: reconciling only the toggled group would remove the rules of
+// the user's other groups until their next knock.
+func (s *Server) syncEnabled(userID int64, username, ip string) {
+	groups, err := s.db.GetUserGroups(userID, true)
+	if err != nil {
+		return
+	}
+	_, _, _ = s.fw.Reconcile(username, ip, portMap(groups))
 }
 
 // serveIndex serves the embedded single-file web client for "/" and "/static/...".
@@ -46,8 +70,10 @@ func (s *Server) knock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Only a real remote address may be allowlisted: not loopback (a direct,
+	// un-proxied caller or a malformed proxy header), not unspecified.
 	clientIP := s.clientIP(r)
-	if clientIP == "" || clientIP == "127.0.0.1" {
+	if ip := net.ParseIP(clientIP); ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
 		errJSON(w, http.StatusBadRequest,
 			"Cannot determine real client IP. Check Nginx X-Real-IP header.")
 		return
@@ -68,14 +94,9 @@ func (s *Server) knock(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusInternalServerError, "Internal error")
 		return
 	}
-	enabled := make(map[string]firewall.PortProto, len(enabledGroups))
-	for _, g := range enabledGroups {
-		enabled[g.Name] = firewall.PortProto{Port: g.Port, Proto: g.Proto}
-	}
-
 	// Reconcile FIRST: align the firewall with the user's enabled groups in one
 	// numbered pass (adds client_ip rules, removes stale/cross-knock orphans).
-	if _, _, ferr := s.fw.Reconcile(username, clientIP, enabled); ferr != nil {
+	if _, _, ferr := s.fw.Reconcile(username, clientIP, portMap(enabledGroups)); ferr != nil {
 		errJSON(w, http.StatusInternalServerError, "Firewall reconcile failed")
 		return
 	}
@@ -312,8 +333,7 @@ func (s *Server) selfToggleMembership(w http.ResponseWriter, r *http.Request) {
 			_ = s.fw.RemoveRule(ip, group.Port, requester.Username, group.Proto, group.Name)
 		} else {
 			// Idempotent add via reconcile: re-enabling an existing rule is a no-op.
-			_, _, _ = s.fw.Reconcile(requester.Username, ip,
-				map[string]firewall.PortProto{group.Name: {Port: group.Port, Proto: group.Proto}})
+			s.syncEnabled(requester.ID, requester.Username, ip)
 		}
 	}
 
@@ -421,8 +441,7 @@ func (s *Server) toggleMembership(w http.ResponseWriter, r *http.Request) {
 		if !enabled {
 			_ = s.fw.RemoveRule(ip, group.Port, target.Username, group.Proto, group.Name)
 		} else {
-			_, _, _ = s.fw.Reconcile(target.Username, ip,
-				map[string]firewall.PortProto{group.Name: {Port: group.Port, Proto: group.Proto}})
+			s.syncEnabled(target.ID, target.Username, ip)
 		}
 	}
 

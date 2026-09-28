@@ -9,7 +9,12 @@
 //     or an nft binary.
 package firewall
 
-import "regexp"
+import (
+	"fmt"
+	"net"
+	"regexp"
+	"strings"
+)
 
 // Rule is the backend-neutral view of one managed allow rule. It mirrors the
 // dict that ufw_ops.list_rules_by_comment returned; Handle is the nftables rule
@@ -54,6 +59,34 @@ var nameRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
 // ValidName reports whether s is an acceptable username or group name.
 func ValidName(s string) bool { return nameRe.MatchString(s) }
+
+// CanonicalIP returns s as one canonical IP literal ("203.0.113.7", "2001:db8::1";
+// an IPv4-mapped IPv6 address becomes plain IPv4), or "" when s is anything else:
+// a CIDR, a zone-scoped address, a hostname, or a firewall keyword like "any".
+// Only single addresses may reach a rule — ufw reads "any" or "0.0.0.0/0" as
+// "everyone", and nft would resolve a hostname.
+func CanonicalIP(s string) string {
+	ip := net.ParseIP(strings.TrimSpace(s))
+	if ip == nil {
+		return ""
+	}
+	return ip.String()
+}
+
+// checkRule is the backends' last line of defence: whatever the caller passed,
+// a managed rule is one IP, a port in 1..65535 and tcp or udp.
+func checkRule(ip string, port int, proto string) error {
+	if net.ParseIP(ip) == nil {
+		return fmt.Errorf("refusing rule for %q: not a single IP address", ip)
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("refusing rule for port %d: out of range", port)
+	}
+	if proto != "tcp" && proto != "udp" {
+		return fmt.Errorf("refusing rule for protocol %q: must be tcp or udp", proto)
+	}
+	return nil
+}
 
 // commentFor builds the rule comment exactly like ufw_ops.add_rule:
 //

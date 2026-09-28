@@ -27,9 +27,15 @@ type DB struct {
 type scanner interface{ Scan(...any) error }
 
 // Open opens (creating parent dirs) the SQLite DB with the required PRAGMAs.
+//
+// The DB holds every user's HMAC secret and TOTP seed in plaintext (both must be
+// usable server-side), so it is owner-only: new parent dirs are 0700 and the DB
+// file (plus any -wal/-shm) is forced to 0600 on every open — SQLite itself would
+// create it 0644 under the usual umask, readable by every local user wherever
+// db_path does not sit inside the installer's 0700 data dir.
 func Open(path string) (*DB, error) {
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, err
 		}
 	}
@@ -40,6 +46,12 @@ func Open(path string) (*DB, error) {
 	}
 	if err := sdb.Ping(); err != nil {
 		return nil, err
+	}
+	for _, f := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.Chmod(f, 0o600); err != nil && !os.IsNotExist(err) {
+			sdb.Close()
+			return nil, fmt.Errorf("restrict permissions of %s: %w", f, err)
+		}
 	}
 	return &DB{sql: sdb, path: path}, nil
 }
@@ -570,6 +582,16 @@ func (d *DB) CountRecentFailedAttempts(ip string, windowSec int) (int, error) {
 	return c, err
 }
 
+// CountRecentUserFailures counts username's failed attempts recorded with reason
+// within windowSec, from any IP — an account-level cap that per-IP throttling
+// cannot give against an attacker with many addresses.
+func (d *DB) CountRecentUserFailures(username, reason string, windowSec int) (int, error) {
+	var c int
+	err := d.sql.QueryRow(`SELECT COUNT(*) FROM failed_attempts WHERE username=? AND reason=? AND created_at >= datetime('now', ?)`,
+		username, reason, fmt.Sprintf("-%d seconds", windowSec)).Scan(&c)
+	return c, err
+}
+
 func (d *DB) CountRecentIPChanges(username string, windowSec int) (int, error) {
 	var c int
 	err := d.sql.QueryRow(`SELECT COUNT(*) FROM operation_log WHERE username=? AND action='ip_change' AND created_at >= datetime('now', ?)`,
@@ -600,14 +622,18 @@ func (d *DB) GetRecentIPChangeIPs(username string, windowSec int) ([]string, err
 // ---- Backup ---- //
 
 // Backup writes a consistent snapshot via VACUUM INTO (safe under WAL) and a
-// sidecar .sha256 checksum, returning the hex digest.
+// sidecar .sha256 checksum, returning the hex digest. The snapshot carries the
+// same plaintext secrets as the DB, so it is owner-only too (see Open).
 func (d *DB) Backup(dest string) (string, error) {
 	if dir := filepath.Dir(dest); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return "", err
 		}
 	}
 	if _, err := d.sql.Exec(`VACUUM INTO ?`, dest); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(dest, 0o600); err != nil {
 		return "", err
 	}
 	f, err := os.Open(dest)

@@ -14,7 +14,7 @@ import (
 // stores only sha256(token); the agent presents the raw token as a bearer.
 func CmdNodeAdd(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("node-add", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
@@ -40,14 +40,18 @@ func CmdNodeAdd(cfgPath string, args []string) error {
 	audit(d, "node_add", name, "")
 	fmt.Printf("Created node '%s'.\n\n", name)
 	fmt.Printf("Enrollment token (shown ONCE — configure the agent with it):\n\n  %s\n\n", token)
-	fmt.Printf("On the node, run the agent:\n  nft-okboy agent --hub https://<hub>/ --node %s --token %s\n", name, token)
+	// The agent reads the token from its environment: passed as --token it would
+	// sit in the process arguments, which every local user can read (ps).
+	fmt.Printf("On the node, put it in /etc/nft-okboy/agent.env (mode 0600) and start the agent unit:\n")
+	fmt.Printf("  NFT_OKBOY_HUB=https://<hub>/\n  NFT_OKBOY_NODE=%s\n  NFT_OKBOY_TOKEN=%s\n", name, token)
+	fmt.Printf("(by hand: NFT_OKBOY_TOKEN=<token> nft-okboy agent --hub https://<hub>/ --node %s)\n", name)
 	return nil
 }
 
 // CmdNodeList prints the registered nodes: id, name, last-seen.
 func CmdNodeList(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("node-list", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	_, d, err := loadCfgDB(cfgPath)
@@ -83,7 +87,7 @@ func CmdNodeList(cfgPath string, args []string) error {
 // CmdNodeDel deletes a node; its group targets cascade away via the FK.
 func CmdNodeDel(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("node-del", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 1 {
@@ -136,7 +140,7 @@ func CmdGroupTarget(cfgPath string, args []string) error {
 func groupTargetAdd(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("group-target add", flag.ContinueOnError)
 	proto := fs.String("proto", "tcp", "Protocol (default: tcp)")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 3 {
@@ -179,7 +183,7 @@ func groupTargetAdd(cfgPath string, args []string) error {
 
 func groupTargetList(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("group-target list", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	_, d, err := loadCfgDB(cfgPath)
@@ -204,7 +208,7 @@ func groupTargetList(cfgPath string, args []string) error {
 
 func groupTargetDel(cfgPath string, args []string) error {
 	fs := flag.NewFlagSet("group-target del", flag.ContinueOnError)
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
 	if fs.NArg() < 2 {

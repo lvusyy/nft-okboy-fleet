@@ -13,6 +13,40 @@ import (
 // port is branded "nft-okboy" consistently (matching /health service + rule prefix).
 const issuer = "nft-okboy"
 
+// totpFailReason tags every failed TOTP check in failed_attempts — step-up,
+// re-enroll, disable and activate alike — so totpLocked counts them together.
+const totpFailReason = "Invalid TOTP code"
+
+// totpLocked answers 429 and returns true when user has failed too many TOTP
+// checks within the throttle window. The count is per ACCOUNT, from any IP and
+// across every TOTP endpoint: with the per-IP throttle alone, someone holding an
+// admin's HMAC secret could spread 6-digit guesses over many addresses (or over
+// the endpoints that did not count failures) until one hit.
+func (s *Server) totpLocked(w http.ResponseWriter, user *db.User) bool {
+	if s.cfg.ThrottleMaxFailures <= 0 {
+		return false
+	}
+	n, err := s.db.CountRecentUserFailures(user.Username, totpFailReason, s.cfg.ThrottleWindow)
+	if err != nil || n < s.cfg.ThrottleMaxFailures {
+		return false // a counting error does not deny, matching CheckIPThrottle
+	}
+	errJSON(w, http.StatusTooManyRequests, "Too many failed TOTP codes; try again later")
+	return true
+}
+
+// totpFailed records a failed TOTP check: an audit row (action, with "replay"
+// as detail when the code was valid but already used) plus a failed attempt that
+// counts toward the caller IP's throttle and the account's totpLocked cap.
+func (s *Server) totpFailed(r *http.Request, user *db.User, action string, replayed bool) {
+	var detail *string
+	if replayed {
+		detail = strPtr("replay")
+	}
+	_ = s.db.LogAudit(user.Username, action, strPtr(user.Username), detail)
+	ip := s.clientIP(r)
+	_ = s.db.RecordFailedAttempt(strPtr(user.Username), &ip, totpFailReason)
+}
+
 // stepUp is the TOTP step-up gate for sensitive admin ops, a faithful port of
 // app.py's _step_up_error(user). It returns true when it has short-circuited the
 // request (a response was already written) and false when the caller may proceed.
@@ -25,9 +59,11 @@ const issuer = "nft-okboy"
 //   - user has TOTP enabled → a valid, non-replayed code is mandatory. The code
 //     comes from the X-TOTP-Code header or the totp_code body field. A missing/
 //     wrong/replayed code logs stepup_failed, records a failed attempt toward the
-//     IP throttle (so an already-admin-authenticated caller cannot brute-force the
-//     6-digit code unbounded — the HMAC throttle never sees these), and returns
+//     IP throttle and the account's TOTP cap (so an already-admin-authenticated
+//     caller cannot brute-force the 6-digit code unbounded — the HMAC throttle
+//     never sees these), and returns
 //     403 {"ok":false,"error":"Valid TOTP code required","totp_required":true}.
+//     Past the cap (totpLocked) every TOTP check answers 429 for the window.
 //     On success, when replay protection is on, the matched counter is persisted.
 //   - user without TOTP + require_admin_totp config → blocked until enrolled:
 //     403 {"ok":false,"error":"Admin TOTP enrollment required before this action",
@@ -35,6 +71,9 @@ const issuer = "nft-okboy"
 //   - otherwise → proceed (false).
 func (s *Server) stepUp(w http.ResponseWriter, r *http.Request, user *db.User, body map[string]any) bool {
 	if user.TOTPEnabled {
+		if s.totpLocked(w, user) {
+			return true
+		}
 		code := r.Header.Get("X-TOTP-Code")
 		if code == "" {
 			code = jsonString(body, "totp_code")
@@ -60,14 +99,9 @@ func (s *Server) stepUp(w http.ResponseWriter, r *http.Request, user *db.User, b
 			}
 		}
 		if !valid {
-			detail := (*string)(nil)
-			if replayed {
-				detail = strPtr("replay")
-			}
-			_ = s.db.LogAudit(user.Username, "stepup_failed", strPtr(user.Username), detail)
-			// Count a bad/replayed step-up toward the per-IP throttle.
-			ip := s.clientIP(r)
-			_ = s.db.RecordFailedAttempt(strPtr(user.Username), &ip, "Invalid TOTP step-up")
+			// Count a bad/replayed step-up toward the per-IP throttle and the
+			// account's TOTP cap.
+			s.totpFailed(r, user, "stepup_failed", replayed)
 			writeJSON(w, http.StatusForbidden, map[string]any{
 				"ok":            false,
 				"error":         "Valid TOTP code required",
@@ -126,6 +160,9 @@ func (s *Server) totpEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	body := readJSON(r)
 	if user.TOTPEnabled {
+		if s.totpLocked(w, user) {
+			return
+		}
 		recode := r.Header.Get("X-TOTP-Code")
 		if recode == "" {
 			recode = jsonString(body, "totp_code")
@@ -138,6 +175,7 @@ func (s *Server) totpEnroll(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !ok {
+			s.totpFailed(r, user, "totp_reenroll_failed", false)
 			writeJSON(w, http.StatusForbidden, map[string]any{
 				"ok":            false,
 				"error":         "Valid TOTP code required to re-enroll",
@@ -172,9 +210,13 @@ func (s *Server) totpActivate(w http.ResponseWriter, r *http.Request) {
 		errJSON(w, http.StatusBadRequest, "No pending enrollment; call enroll first")
 		return
 	}
+	if s.totpLocked(w, user) {
+		return
+	}
 	body := readJSON(r)
 	code := jsonString(body, "totp_code")
 	if !auth.VerifyTOTP(*user.TOTPSecret, code, time.Now().Unix()) {
+		s.totpFailed(r, user, "totp_activate_failed", false)
 		errJSON(w, http.StatusBadRequest, "Invalid code")
 		return
 	}
@@ -196,6 +238,9 @@ func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user.TOTPEnabled {
+		if s.totpLocked(w, user) {
+			return
+		}
 		body := readJSON(r)
 		code := jsonString(body, "totp_code")
 		// Replay-protected consume (RFC 6238 §5.2): disabling 2FA is security-
@@ -206,6 +251,7 @@ func (s *Server) totpDisable(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if !ok {
+			s.totpFailed(r, user, "totp_disable_failed", false)
 			errJSON(w, http.StatusForbidden, "Valid TOTP code required to disable")
 			return
 		}

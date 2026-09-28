@@ -7,6 +7,11 @@
 # Day-2 upgrades are easier still:  sudo nft-okboy upgrade
 #
 # Env knobs:  NFT_OKBOY_VERSION=v0.2.0  (pin a version)   NO_COLOR=1  (plain output)
+#             NFT_OKBOY_SHA256=<hex>    (the binary's sha256 from the release page, when
+#                                        GitHub cannot be reached to look it up)
+#             NFT_OKBOY_GH_MIRROR=<url> (also fetch checksums, config and unit through this
+#                                        mirror when GitHub is unreachable — only for a mirror
+#                                        you trust as much as GitHub itself)
 set -eu
 
 REPO="lvusyy/nft-okboy-fleet"
@@ -63,7 +68,9 @@ if [ -z "$VER" ]; then
   [ -n "$VER" ] || die "Could not resolve the latest release. Set NFT_OKBOY_VERSION=vX.Y.Z and retry."
 fi
 
-# ---- download helper: try direct, then CN-friendly mirrors ----
+# ---- download helpers ----
+# dl: the release BINARY only — try direct, then CN-friendly mirrors. A mirror is
+# just a transport here: the bytes must match the checksum taken from GitHub below.
 # curl gets a connect timeout AND a stall guard (--speed-limit/--speed-time): the
 # GitHub release CDN can connect then reset mid-transfer, which would hang a plain
 # `curl` forever and never fail over to a mirror. Abort a transfer that drops below
@@ -77,20 +84,47 @@ dl() { # dl <github-url> <out>
   done
   return 1
 }
+# dl_gh: everything that vouches for the binary or runs as root without being
+# covered by its checksum (SHA256SUMS, config, systemd unit) comes from GitHub
+# itself — a mirror able to tamper with the binary could tamper with these too.
+# NFT_OKBOY_GH_MIRROR opts in to one mirror you trust, as a fallback.
+dl_gh() { # dl_gh <github-url> <out>
+  curl -fsSL --connect-timeout 8 --max-time 60 "$1" -o "$2" 2>/dev/null && return 0
+  [ -n "${NFT_OKBOY_GH_MIRROR:-}" ] &&
+    curl -fsSL --connect-timeout 8 --max-time 60 "$NFT_OKBOY_GH_MIRROR$1" -o "$2" 2>/dev/null
+}
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
+# ---- trusted checksum (before downloading anything that will run as root) ----
+# Order: NFT_OKBOY_SHA256 by hand, else the digest GitHub's release API reports for
+# the asset, else the release's SHA256SUMS fetched from github.com. No checksum, no
+# install — there is deliberately no "skip verification" path.
+EXP=$(printf '%s' "${NFT_OKBOY_SHA256:-}" | tr 'A-F' 'a-f')
+if [ -z "$EXP" ]; then
+  # The API answers compact JSON; one field per line is enough to pair each asset
+  # "name" with the "digest" that follows it in the same asset object.
+  EXP=$(curl -fsSL --connect-timeout 8 --max-time 25 -H 'Accept: application/vnd.github+json' \
+          "https://api.github.com/repos/$REPO/releases/tags/$VER" 2>/dev/null |
+        tr ',{}' '\n\n\n' |
+        awk -v want="$ASSET" '
+          { gsub(/^[ \t]+|[ \t]+$/, ""); gsub(/": +/, "\":") }
+          $0 == "\"name\":\"" want "\"" { hit = 1; next }
+          hit && /^"browser_download_url"/ { hit = 0 }
+          hit && /^"digest":"sha256:/ { d = $0; sub(/^"digest":"sha256:/, "", d); sub(/"$/, "", d); print tolower(d); exit }') || EXP=""
+fi
+if [ -z "$EXP" ] && dl_gh "https://github.com/$REPO/releases/download/$VER/SHA256SUMS" "$TMP/sums"; then
+  EXP=$(awk -v f="$ASSET" '{ sub(/^\*/, "", $2) } $2 == f { print tolower($1); exit }' "$TMP/sums")
+fi
+case "$EXP" in *[!0-9a-f]*) EXP="" ;; esac
+[ ${#EXP} -eq 64 ] || die "Could not get a trusted checksum for $ASSET $VER from GitHub (is api.github.com / github.com reachable?). Retry, or set NFT_OKBOY_SHA256=<the sha256 shown for $ASSET on the release page>."
+
 say "Downloading nft-okboy $VER ($ASSET)…"
 dl "https://github.com/$REPO/releases/download/$VER/$ASSET" "$TMP/nft-okboy" || die "Download failed."
-if dl "https://github.com/$REPO/releases/download/$VER/SHA256SUMS" "$TMP/sums"; then
-  exp=$(awk -v f="$ASSET" '$2==f {print $1}' "$TMP/sums")
-  got=$(sha256sum "$TMP/nft-okboy" | cut -d' ' -f1)
-  [ -n "$exp" ] && [ "$exp" = "$got" ] || die "Checksum mismatch — aborting."
-  ok "checksum verified"
-else
-  warn "No published SHA256SUMS; skipping verification."
-fi
+got=$(sha256sum "$TMP/nft-okboy" | cut -d' ' -f1)
+[ "$got" = "$EXP" ] || die "Checksum mismatch: the download does not match the checksum GitHub publishes — aborting."
+ok "checksum verified against GitHub"
 
 UPGRADE=0; [ -x "$BIN" ] && UPGRADE=1
 
@@ -103,7 +137,7 @@ ok "binary → $BIN ($VER)"
 # ---- config (written once; an existing config is never overwritten) ----
 if [ ! -f "$CONF" ]; then
   install -d -m 700 "$CONF_DIR"
-  dl "$RAW/$VER/config.example.yaml" "$TMP/conf" || die "Could not fetch the default config."
+  dl_gh "$RAW/$VER/config.example.yaml" "$TMP/conf" || die "Could not fetch the default config from GitHub (see NFT_OKBOY_GH_MIRROR)."
   install -m 600 "$TMP/conf" "$CONF"
   ok "config → $CONF (production-sane defaults)"
 else
@@ -112,7 +146,7 @@ fi
 
 # ---- systemd unit ----
 if [ ! -f "$UNIT" ]; then
-  dl "$RAW/$VER/deploy/nft-okboy.service" "$TMP/unit" || die "Could not fetch the systemd unit."
+  dl_gh "$RAW/$VER/deploy/nft-okboy.service" "$TMP/unit" || die "Could not fetch the systemd unit from GitHub (see NFT_OKBOY_GH_MIRROR)."
   install -m 644 "$TMP/unit" "$UNIT"
   systemctl daemon-reload
   systemctl enable nft-okboy >/dev/null 2>&1 || true
@@ -123,7 +157,9 @@ fi
 SECRET=""
 if [ "$UPGRADE" = 0 ]; then
   say "Creating the admin user…"
-  out=$("$BIN" -c "$CONF" user-add admin --admin 2>&1) || true
+  # Flag BEFORE the name: releases up to v0.3.0 stop flag parsing at the first
+  # positional, so `user-add admin --admin` silently created a non-admin there.
+  out=$("$BIN" -c "$CONF" user-add --admin admin 2>&1) || true
   SECRET=$(printf '%s' "$out" | grep -oE '[0-9a-f]{64}' | head -n1) || true
 fi
 
@@ -155,7 +191,7 @@ if [ -n "$SECRET" ]; then
   printf "    username:  ${B}admin${X}\n"
   printf "    secret:    ${B}%s${X}\n" "$SECRET"
 else
-  warn "Could not auto-create admin. Create one with: nft-okboy user-add <name> --admin"
+  warn "Could not auto-create admin. Create one with: nft-okboy user-add --admin <name>"
 fi
 printf "${B}════════════════════════════════════════════════════════════${X}\n"
 echo

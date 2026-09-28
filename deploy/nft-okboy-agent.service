@@ -14,20 +14,24 @@ Type=simple
 EnvironmentFile=/etc/nft-okboy/agent.env
 # The agent reads only the firewall backend + rule_prefix from agent.yaml; it
 # holds NO database and opens NO listening port — it dials OUT to the hub only.
+# The token is read from the environment (NFT_OKBOY_TOKEN) and deliberately NOT
+# passed as --token: process arguments are readable by every local user (ps).
+# A hub with a self-signed certificate: add --ca /etc/nft-okboy/hub.pem.
 ExecStart=/opt/nft-okboy/nft-okboy -c /etc/nft-okboy/agent.yaml agent \
-    --hub ${NFT_OKBOY_HUB} --node ${NFT_OKBOY_NODE} --token ${NFT_OKBOY_TOKEN} --interval 15
+    --hub ${NFT_OKBOY_HUB} --node ${NFT_OKBOY_NODE} --interval 15
 Restart=on-failure
 RestartSec=5
 
 # The agent drives nftables/ufw (needs CAP_NET_ADMIN, which root has). The ufw
 # backend also rewrites /etc/ufw; the nft backend programs the kernel via netlink
-# and needs neither path (a nft-only node can drop the ReadWritePaths line).
+# and needs neither path. The "-" prefix skips a path that does not exist, so the
+# same unit starts on a nft-only node without ufw installed.
 User=root
 NoNewPrivileges=yes
 ProtectHome=yes
 PrivateTmp=yes
 ProtectSystem=full
-ReadWritePaths=/etc/ufw /lib/ufw
+ReadWritePaths=-/etc/ufw -/lib/ufw
 RestrictAddressFamilies=AF_INET AF_INET6 AF_NETLINK AF_UNIX
 
 [Install]

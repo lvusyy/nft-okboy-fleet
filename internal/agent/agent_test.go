@@ -1,10 +1,43 @@
 package agent
 
 import (
+	"context"
+	"crypto/x509"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+	"time"
 
 	"nft-okboy-fleet/internal/firewall"
 )
+
+// TestClientTrustAndRedirects: a self-signed hub is trusted only through a
+// pinned certificate (--ca), and a redirect is never followed with the token.
+func TestClientTrustAndRedirects(t *testing.T) {
+	hub := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/moved" {
+			http.Redirect(w, r, "http://attacker.example/steal", http.StatusFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true,"rules":[]}`))
+	}))
+	defer hub.Close()
+	pinned := x509.NewCertPool()
+	pinned.AddCert(hub.Certificate())
+	ctx := context.Background()
+	opts := Options{Token: "t", Interval: time.Second}
+
+	if _, err := fetch(ctx, newClient(opts), hub.URL+"/state", opts); err == nil {
+		t.Fatal("a self-signed hub must not be trusted without --ca")
+	}
+	opts.RootCAs = pinned
+	if _, err := fetch(ctx, newClient(opts), hub.URL+"/state", opts); err != nil {
+		t.Fatalf("pinned hub certificate rejected: %v", err)
+	}
+	if _, err := fetch(ctx, newClient(opts), hub.URL+"/moved", opts); err == nil {
+		t.Fatal("a redirect must not be followed")
+	}
+}
 
 func keyset(t *testing.T, be *firewall.MockBackend) map[string]bool {
 	t.Helper()
@@ -60,6 +93,24 @@ func TestAgentReconcile(t *testing.T) {
 	}
 	if len(keyset(t, be)) != 0 {
 		t.Errorf("expected no managed rules after empty reconcile")
+	}
+}
+
+// TestSanitize is the other hub-compromise guard: only one-IP rules on a valid
+// port/proto with well-formed names survive, IPs come out canonical.
+func TestSanitize(t *testing.T) {
+	desired := []rule{
+		{IP: "203.0.113.10", Port: 18080, Proto: "tcp", User: "alice", Group: "web"},
+		{IP: "2001:DB8::1", Port: 18080, Proto: "tcp", User: "bob", Group: "web"},
+		{IP: "any", Port: 18080, Proto: "tcp", User: "eve", Group: "web"},
+		{IP: "0.0.0.0/0", Port: 18080, Proto: "tcp", User: "eve", Group: "web"},
+		{IP: "203.0.113.11", Port: 0, Proto: "tcp", User: "eve", Group: "web"},
+		{IP: "203.0.113.11", Port: 18080, Proto: "icmp", User: "eve", Group: "web"},
+		{IP: "203.0.113.11", Port: 18080, Proto: "tcp", User: "eve:x", Group: "web"},
+	}
+	got := sanitize(desired)
+	if len(got) != 2 || got[0].User != "alice" || got[1].IP != "2001:db8::1" {
+		t.Fatalf("want alice + canonical bob only, got %+v", got)
 	}
 }
 

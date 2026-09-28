@@ -759,6 +759,10 @@ const I18N = {
     prompt_totp_delete_user: "Enter your 6-digit TOTP code to confirm deleting {0}:",
     prompt_totp_delete_group: "Enter your 6-digit TOTP code to confirm deleting group {0}:",
     prompt_totp_set_admin: "Enter your 6-digit TOTP code to confirm changing admin rights for {0}:",
+    prompt_totp_create_user: "Enter your 6-digit TOTP code to confirm creating user {0}:",
+    prompt_totp_create_group: "Enter your 6-digit TOTP code to confirm creating group {0}:",
+    prompt_totp_membership: "Enter your 6-digit TOTP code to confirm changing the groups of {0}:",
+    prompt_totp_reenroll: "Enter your current TOTP code to confirm replacing your 2FA secret:",
     prompt_set_admin_pin: "Set an admin PIN to lock the admin console (encrypts your saved credentials):",
     prompt_new_secret: "New secret for {0} (copy & deliver securely — shown once):",
     prompt_totp_disable: "Enter your current TOTP code to disable 2FA:",
@@ -893,6 +897,10 @@ const I18N = {
     prompt_totp_delete_user: "请输入你的 6 位 TOTP 验证码以确认删除 {0}：",
     prompt_totp_delete_group: "请输入你的 6 位 TOTP 验证码以确认删除分组 {0}：",
     prompt_totp_set_admin: "请输入你的 6 位 TOTP 验证码以确认更改 {0} 的管理员权限：",
+    prompt_totp_create_user: "请输入你的 6 位 TOTP 验证码以确认创建用户 {0}：",
+    prompt_totp_create_group: "请输入你的 6 位 TOTP 验证码以确认创建分组 {0}：",
+    prompt_totp_membership: "请输入你的 6 位 TOTP 验证码以确认更改 {0} 的分组：",
+    prompt_totp_reenroll: "请输入你当前的 TOTP 验证码以确认更换双因素密钥：",
     prompt_set_admin_pin: "设置管理 PIN 码以锁定管理控制台（加密保存的凭据）：",
     prompt_new_secret: "{0} 的新密钥（请安全复制并交付 — 仅显示一次）：",
     prompt_totp_disable: "请输入你当前的 TOTP 验证码以禁用双因素认证：",
@@ -1341,6 +1349,13 @@ function forgetCredentials() {
   clearVault();
 }
 
+// The login form keeps whatever was typed or auto-filled from storage; wipe the
+// secret (and PIN) so it cannot be reused by whoever sits at the browser next.
+function clearLoginSecret() {
+  fSecret.value = "";
+  fLoginPin.value = "";
+}
+
 let pendingPin = null; // PIN captured at login, used to encrypt vault
 
 // ================================================================ //
@@ -1418,6 +1433,7 @@ btnKnock.addEventListener("click", () => {
 
 btnDisconnect.addEventListener("click", () => {
   forgetCredentials();
+  clearLoginSecret(); // else Connect would reopen the session (and admin, with a NEW PIN)
   disconnect();
 });
 
@@ -1519,6 +1535,19 @@ async function apiAdmin(method, path, body) {
   }
 }
 
+// Sensitive admin write with the TOTP step-up retry: when the server answers
+// {totp_required:true} (the admin has 2FA on), ask for a code once and resend
+// the same request with it. A cancelled prompt returns the 403 envelope as-is.
+async function apiAdminStepUp(method, path, body, promptText) {
+  let r = await apiAdmin(method, path, body);
+  if (!r.ok && r.totp_required) {
+    const code = prompt(promptText);
+    if (!code) return r;
+    r = await apiAdmin(method, path, { ...(body || {}), totp_code: code });
+  }
+  return r;
+}
+
 // After a successful knock, probe admin status to reveal the Admin button.
 async function refreshAdminFlag() {
   if (!credentials) return;
@@ -1563,6 +1592,7 @@ btnAdminBack.addEventListener("click", () => {
 
 btnLock.addEventListener("click", () => {
   vaultKey = null;
+  clearLoginSecret(); // a locked console must not be one Disconnect+Connect away
   hideSecret();
   adminView.hidden = true;
   // Return to dashboard if still connected, else to login.
@@ -1834,7 +1864,8 @@ btnAddUser.addEventListener("click", async () => {
   const username = $("#new-user").value.trim();
   if (!username) return;
   const is_admin = $("#new-user-admin").checked;
-  const r = await apiAdmin("POST", "/api/admin/users", { username, is_admin });
+  const r = await apiAdminStepUp("POST", "/api/admin/users", { username, is_admin },
+    t("prompt_totp_create_user", username));
   if (r.ok) {
     addLog(t("log_created_user", username), "ok");
     $("#new-user").value = "";
@@ -1847,7 +1878,8 @@ btnAddGroup.addEventListener("click", async () => {
   const name = $("#new-group-name").value.trim();
   const port = parseInt($("#new-group-port").value, 10);
   if (!name || !port) return;
-  const r = await apiAdmin("POST", "/api/admin/groups", { name, port });
+  const r = await apiAdminStepUp("POST", "/api/admin/groups", { name, port },
+    t("prompt_totp_create_group", name));
   if (r.ok) {
     addLog(t("log_created_group", name), "ok");
     $("#new-group-name").value = "";
@@ -1977,10 +2009,12 @@ adminUsersEl.addEventListener("change", async (e) => {
   try {
     let r;
     if (cb.checked) {
-      r = await apiAdmin("POST", `/api/admin/users/${userId}/groups`, { group_id: Number(groupId), enabled: true });
+      r = await apiAdminStepUp("POST", `/api/admin/users/${userId}/groups`, { group_id: Number(groupId), enabled: true },
+        t("prompt_totp_membership", username));
       if (r.ok) addLog(t("log_group_added", username, groupName), "ok");
     } else {
-      r = await apiAdmin("POST", "/api/admin/memberships/remove", { username, group_name: groupName });
+      r = await apiAdminStepUp("POST", "/api/admin/memberships/remove", { username, group_name: groupName },
+        t("prompt_totp_membership", username));
       if (r.ok) addLog(t("log_group_removed", username, groupName), "warn");
     }
     if (!r.ok) {
@@ -2031,7 +2065,7 @@ async function refreshTotp() {
 }
 
 btnTotpEnroll.addEventListener("click", async () => {
-  const r = await apiAdmin("POST", "/api/admin/totp/enroll");
+  const r = await apiAdminStepUp("POST", "/api/admin/totp/enroll", null, t("prompt_totp_reenroll"));
   if (!r.ok) { adminError.textContent = r.error || t("err_enroll_failed"); adminError.style.display = "block"; return; }
   totpSecretEl.innerHTML = t("totp_secret_html", esc(r.secret), esc(r.otpauth_uri));
   totpEnrollBox.hidden = false;
